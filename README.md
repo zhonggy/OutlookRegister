@@ -179,5 +179,5 @@ Attribution retained for upstream OutlookRegister and MIT-licensed portions this
 
 ## Community
 
-- [linux.do](https://linux.do): **Learn AI on L-Station!!!**
+- [![LINUX DO](./linuxdo.webp)](https://linux.do) [linux.do](https://linux.do): **Learn AI on L-Station!!!**
 - [Nodeseek.com](https://www.nodeseek.com): **Nodeseek is a place for people who love web development, hosting, vps / server and other geek things.**

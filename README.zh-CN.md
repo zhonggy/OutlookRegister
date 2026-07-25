@@ -178,5 +178,5 @@ OAuth 可处理：个人/工作帐户选择、保护帐户、验证电子邮件�
 
 ## 友情链接
 
-- [linux.do](https://linux.do)：**学AI，上L站！！！**
+- [![LINUX DO](./linuxdo.webp)](https://linux.do) [linux.do](https://linux.do)：**学AI，上L站！！！**
 - [Nodeseek.com](https://www.nodeseek.com)：**Nodeseek是一个为热爱web开发、托管、vps /服务器和其他极客事物的人提供的地方。**
