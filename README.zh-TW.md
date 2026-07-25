@@ -178,5 +178,5 @@ OAuth 可處理：個人／工作帳戶選擇、保護帳戶、驗證電子郵�
 
 ## 友情連結
 
-- [![LINUX DO](./linuxdo.webp)](https://linux.do) [linux.do](https://linux.do)：**學AI，上L站！！！**
+- <a href="https://linux.do"><img src="./linuxdo.webp" width="22" height="22" alt="LINUX DO" align="center"></a> [linux.do](https://linux.do)：**學AI，上L站！！！**
 - [Nodeseek.com](https://www.nodeseek.com)：**Nodeseek是一個為熱愛web開發、託管、vps /伺服器和其他極客事物的人提供的地方。**
