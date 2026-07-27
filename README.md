@@ -17,6 +17,12 @@
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-blue">
 </p>
 
+## Companion Projects
+
+- **[Easy Proxies](https://github.com/daimon3332/easy-proxies) (Strongly recommended companion!!!!!!) — required for multi-port mode.** Provides the local proxy pool consumed by OutlookRegister when `proxy.mode` is set to `multiple`. Start and configure Easy Proxies before running OutlookRegister in this mode.
+- **[OutlookManage](https://github.com/daimon3332/OutlookManage) — account management.** Imports and manages registered Outlook accounts and their OAuth2 credentials.
+- **[Outlook OAuth GetToken](https://github.com/daimon3332/Outlook-Oauth-GetToken) — standalone token retrieval.** Obtains an OAuth2 `refresh_token` for an existing Microsoft mailbox without running the registration workflow.
+
 > Community fork based on **[LainsNL/OutlookRegister](https://github.com/LainsNL/OutlookRegister)**.  
 > This fork focuses on registration + OAuth2 hardening: recovery-email binding (optional), multi-stage login challenges, cookie-first OAuth, batching, and interrupt-safe summaries.
 

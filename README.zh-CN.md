@@ -17,6 +17,12 @@
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-blue">
 </p>
 
+## 配套项目
+
+- **[Easy Proxies](https://github.com/daimon3332/easy-proxies)（强烈推荐搭配使用！！！！！！）— 多端口模式必需。** 当 `proxy.mode` 设为 `multiple` 时，为 OutlookRegister 提供本地代理池；使用该模式前请先启动并配置 Easy Proxies。
+- **[OutlookManage](https://github.com/daimon3332/OutlookManage) — 账号管理。** 用于导入和管理已注册的 Outlook 账号及其 OAuth2 凭据。
+- **[Outlook OAuth GetToken](https://github.com/daimon3332/Outlook-Oauth-GetToken) — 单独获取令牌。** 无需运行注册流程，即可为已有微软邮箱获取 OAuth2 `refresh_token`。
+
 > 本项目基于 **[LainsNL/OutlookRegister](https://github.com/LainsNL/OutlookRegister)** 二开。  
 > 增强点包括：可选辅助邮箱绑定、更完整的 OAuth 中间页处理、cookie 优先授权、分批调度，以及 Ctrl+C 中断后的汇总与清理。
 
