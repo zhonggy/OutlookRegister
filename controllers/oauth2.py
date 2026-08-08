@@ -1,7 +1,11 @@
+import threading
 import time
 from urllib.parse import parse_qs, quote, urlparse
 
 import requests
+
+# === 线程级“当前任务账号”上下文：供保护帐户页绑定成功后保存 账号→辅助邮箱 记录 ===
+_ACCOUNT_CTX = threading.local()
 
 # === OAuth2 常量 ===
 CLIENT_ID = "9e5f94bc-e8a4-4e73-b8be-63364c29d753"
@@ -338,12 +342,17 @@ def _handle_protect_account(page, log, temp_mail_cfg=None, failure_hook=None, al
     log('protect_account', 'OAuth 出现保护帐户页（概率事件），尝试绑定', 'WARN')
     cfg = temp_mail_cfg or {}
     ok = False
+    session = None
     if cfg.get('enabled', True):
         try:
             from controllers.recovery_bind import bind_recovery_email
-            result = bind_recovery_email(page, cfg, log=log)
+            # 辅助邮箱前缀与 Outlook 账号保持一致（取 @ 前部分）
+            acct = getattr(_ACCOUNT_CTX, 'email', '')
+            acct_name = acct.split('@')[0] if acct and '@' in acct else None
+            result = bind_recovery_email(page, cfg, log=log, name=acct_name)
             if isinstance(result, tuple):
                 ok = bool(result[0])
+                session = result[1] if len(result) > 1 else None
             else:
                 ok = bool(result)
         except Exception as exc:
@@ -351,6 +360,17 @@ def _handle_protect_account(page, log, temp_mail_cfg=None, failure_hook=None, al
             ok = False
     if ok:
         log('protect_account', 'OAuth 阶段备用邮箱绑定成功', 'OK')
+        # 保存 账号→辅助邮箱 绑定记录（线程级账号上下文）
+        try:
+            from controllers.recovery_bind import save_recovery_record
+            save_recovery_record(
+                getattr(_ACCOUNT_CTX, 'email', ''),
+                getattr(_ACCOUNT_CTX, 'password', ''),
+                (session or {}).get('address', ''),
+                log=log,
+            )
+        except Exception as exc:
+            log('protect_account', f'保存辅助邮箱记录失败: {exc}', 'WARN')
         page.wait_for_timeout(800)
         try:
             if _locator_visible(page.locator('#iShowSkip')):
@@ -911,6 +931,9 @@ def _perform_login_after_cookie_fail(
     page, full_email, password, log, failure_hook=None, state='login_email',
     captured_code=None, temp_mail_cfg=None, recovery_already_bound=False, recovery_session=None,
 ):
+    # 记录当前任务账号，供保护帐户页绑定成功后保存 账号→辅助邮箱 记录
+    _ACCOUNT_CTX.email = full_email
+    _ACCOUNT_CTX.password = password
     state = _digest_post_email_states(
         page, log, state, captured_code=captured_code, temp_mail_cfg=temp_mail_cfg,
         recovery_already_bound=recovery_already_bound, recovery_session=recovery_session,
@@ -1156,6 +1179,9 @@ def _exchange_captured_code(page, captured_code, log, failure_hook=None, current
 
 
 def get_oauth2_token(page, full_email, password, results_dir=None, prefix='', backup_proxy=None, failure_hook=None, log_hook=None, current_proxy="", token_proxy_getter=None, temp_mail_cfg=None, recovery_already_bound=False, recovery_session=None):
+    # 记录当前任务账号，供保护帐户页绑定成功后保存 账号→辅助邮箱 记录
+    _ACCOUNT_CTX.email = full_email
+    _ACCOUNT_CTX.password = password
     # 同 context 必须 prefer_sso：不要 sso_reload，否则 cookie 会话被强制打断
     auth_url = build_auth_url(prefer_sso=True)
 

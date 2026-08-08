@@ -764,6 +764,9 @@ class OutlookController:
         返回: True(注册成功) 或 False(失败)
         """
         fake = Faker()
+        # 记录当前账号，供辅助邮箱绑定成功后保存 账号→辅助邮箱 记录
+        self.thread_local._reg_email = f"{email}{self.email_suffix}"
+        self.thread_local._reg_password = password
         lastname = fake.last_name()
         firstname = fake.first_name()
         year = str(random.randint(1999, 2007))
@@ -944,7 +947,10 @@ class OutlookController:
         def _log(stage, message, level='INFO'):
             self.log_event('REGISTER', level, stage, message)
 
-        result = bind_recovery_email(page, self.temp_mail_cfg, log=_log)
+        # 辅助邮箱前缀与 Outlook 账号保持一致（grtbyazdfncld@outlook.com → grtbyazdfncld@1313223.cyou）
+        reg_email = getattr(self.thread_local, '_reg_email', '')
+        reg_name = reg_email.split('@')[0] if reg_email and '@' in reg_email else None
+        result = bind_recovery_email(page, self.temp_mail_cfg, log=_log, name=reg_name)
         # 兼容 (ok, session) 或旧版 bool
         if isinstance(result, tuple):
             ok, session = result[0], (result[1] if len(result) > 1 else None)
@@ -959,6 +965,17 @@ class OutlookController:
                     'REGISTER', 'INFO', 'recovery_session',
                     f"已保存辅助邮箱会话 addr={session.get('address')}",
                 )
+            # 保存 账号→辅助邮箱 绑定记录到 Results/recovery_emails.txt
+            try:
+                from controllers.recovery_bind import save_recovery_record
+                save_recovery_record(
+                    getattr(self.thread_local, '_reg_email', ''),
+                    getattr(self.thread_local, '_reg_password', ''),
+                    (session or {}).get('address', ''),
+                    log=_log,
+                )
+            except Exception as exc:
+                self.log_event('REGISTER', 'WARN', 'recovery_save', f'保存辅助邮箱记录失败: {exc}')
         else:
             self.bump_failure('recovery_bind_fail')
         return ok

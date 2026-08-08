@@ -1,4 +1,10 @@
-"""CF Temp Mail 客户端：每任务独立地址 + JWT，避免多线程验证码串号。"""
+"""临时邮箱客户端：每任务独立地址，避免多线程验证码串号。
+
+支持两种后端：
+  1. CF Temp Mail（默认）：POST /admin/new_address，每实例独立 jwt。
+  2. maillab/cloud-mail：type="cloud_mail"，POST /api/public/addUser。
+     注意 cloud-mail 的 token 全局唯一，重生成会使旧的失效，故所有线程共享同一 token。
+"""
 import random
 import re
 import string
@@ -201,9 +207,182 @@ class TempMailClient:
         return None
 
 
+class CloudMailClient:
+    """maillab/cloud-mail 客户端（type="cloud_mail"）。
+
+    cloud-mail 全局仅一个活跃 token，重新生成会使旧的失效，因此
+    _shared_token 为类级共享，加锁保证只生成一次，多线程复用同一 token。
+    """
+
+    _shared_token = None
+    _shared_token_lock = threading.Lock()
+
+    def __init__(
+        self,
+        base_url=DEFAULT_BASE,
+        admin_email=None,
+        admin_password=DEFAULT_ADMIN,
+        domain=DEFAULT_DOMAIN,
+        name_prefix=DEFAULT_PREFIX,
+        enable_prefix=False,
+        timeout=30,
+    ):
+        self.base_url = (base_url or DEFAULT_BASE).rstrip("/")
+        self.admin_email = admin_email or ""
+        self.admin_password = admin_password or DEFAULT_ADMIN
+        self.domain = domain or DEFAULT_DOMAIN
+        self.name_prefix = name_prefix or DEFAULT_PREFIX
+        self.enable_prefix = bool(enable_prefix)
+        self.timeout = timeout
+        self._lock = threading.Lock()
+        self.address = None
+        self.jwt = None  # 兼容 recovery_bind 的 session 恢复（实例级，仅作 token 缓存）
+        self._session = requests.Session()
+        self._session.headers.update({"User-Agent": "OutlookRegister/1.0"})
+
+    def _unique_name(self):
+        ts = time.strftime("%m%d%H%M%S")
+        tid = abs(threading.get_ident()) % 10000
+        rnd = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+        return f"{self.name_prefix}{ts}{tid:04d}{rnd}"
+
+    def _get_token(self):
+        """返回共享 token；若只有实例级 jwt（从 session 恢复）则提升为共享。"""
+        with self._shared_token_lock:
+            if CloudMailClient._shared_token:
+                return CloudMailClient._shared_token
+        if self.jwt:
+            with self._shared_token_lock:
+                if not CloudMailClient._shared_token:
+                    CloudMailClient._shared_token = self.jwt
+                return CloudMailClient._shared_token
+        return self._gen_token()
+
+    def _gen_token(self, retry=False):
+        """POST /api/public/genToken → 全局 token。"""
+        with self._shared_token_lock:
+            url = f"{self.base_url}/api/public/genToken"
+            payload = {"email": self.admin_email, "password": self.admin_password}
+            resp = self._session.post(url, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            token = (data.get("data") or {}).get("token")
+            if not token:
+                raise RuntimeError(f"cloud_mail genToken missing token: {data}")
+            CloudMailClient._shared_token = token
+            return token
+
+    def create_address(self, name=None, domain=None):
+        """POST /api/public/addUser 创建邮箱。返回 (address, token)。"""
+        name = name or self._unique_name()
+        domain = domain or self.domain
+        address = f"{name}@{domain}"
+        token = self._get_token()
+        url = f"{self.base_url}/api/public/addUser"
+        headers = {"Content-Type": "application/json", "Authorization": token}
+        payload = {"list": [{"email": address}]}
+        resp = self._session.post(url, json=payload, headers=headers, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        code = data.get("code")
+        # 非 200：可能 token 失效，重生成 token 后重试一次
+        if code is not None and int(code) != 200:
+            with self._shared_token_lock:
+                CloudMailClient._shared_token = None
+            token = self._gen_token()
+            headers = {"Content-Type": "application/json", "Authorization": token}
+            resp = self._session.post(url, json=payload, headers=headers, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+        with self._lock:
+            self.address = address
+        self.jwt = token  # 兼容 recovery_bind session 恢复
+        return address, token
+
+    def list_mails(self, limit=20, offset=0):
+        """POST /api/public/emailList，按 toEmail 查收件。"""
+        if not self.address:
+            raise RuntimeError("cloud_mail: create_address first")
+        token = self._get_token()
+        url = f"{self.base_url}/api/public/emailList"
+        headers = {"Content-Type": "application/json", "Authorization": token}
+        payload = {
+            "toEmail": self.address,
+            "type": 0,
+            "size": limit,
+            "num": offset + 1,
+            "timeSort": "desc",
+        }
+        resp = self._session.post(url, json=payload, headers=headers, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("data") or []
+
+    def _mail_blob(self, mail):
+        if not isinstance(mail, dict):
+            return str(mail)
+        parts = []
+        for k in ("subject", "text", "content", "raw", "html", "message", "body", "preview"):
+            v = mail.get(k)
+            if v:
+                parts.append(str(v))
+        for k in ("mail", "data", "payload"):
+            v = mail.get(k)
+            if isinstance(v, dict):
+                parts.append(self._mail_blob(v))
+        return "\n".join(parts)
+
+    def wait_for_code(self, timeout_sec=120, poll_sec=3, after_ts=None, log=None):
+        """轮询该地址邮箱直到解析出验证码。after_ts：只在解析不到时用于去重。"""
+        deadline = time.time() + timeout_sec
+        seen = set()
+        while time.time() < deadline:
+            try:
+                mails = self.list_mails(limit=15, offset=0)
+            except Exception as exc:
+                if log:
+                    log("temp_mail", f"emailList 失败: {exc}", "WARN")
+                time.sleep(poll_sec)
+                continue
+            for mail in mails or []:
+                mid = None
+                if isinstance(mail, dict):
+                    mid = mail.get("emailId") or mail.get("id")
+                key = mid if mid is not None else id(mail)
+                if key in seen:
+                    continue
+                seen.add(key)
+                blob = self._mail_blob(mail)
+                code = TempMailClient.extract_code_from_text(
+                    blob,
+                    exclude_substrings=[self.address, (self.address or "").split("@")[0]],
+                )
+                if code:
+                    if log:
+                        log("temp_mail", f"解析到验证码 code={code} addr={self.address}", "OK")
+                    return code
+            time.sleep(poll_sec)
+        if log:
+            log("temp_mail", f"等待验证码超时 addr={self.address}", "FAIL")
+        return None
+
+
 def client_from_config(cfg):
-    """从 config['temp_mail'] 构建客户端。未配置时 base/admin/domain 为空。"""
+    """从 config['temp_mail'] 构建客户端。
+
+    cfg['type']="cloud_mail" 走 maillab/cloud-mail API；否则走 CF Temp Mail。
+    """
     cfg = cfg or {}
+    if (cfg.get("type") or "").strip().lower() == "cloud_mail":
+        return CloudMailClient(
+            base_url=(cfg.get("base_url") or "").strip(),
+            admin_email=(cfg.get("admin_email") or "").strip(),
+            admin_password=(cfg.get("admin_password") or "").strip(),
+            domain=(cfg.get("domain") or "").strip(),
+            name_prefix=(cfg.get("name_prefix") or DEFAULT_PREFIX).strip() or DEFAULT_PREFIX,
+            enable_prefix=bool(cfg.get("enable_prefix", False)),
+            timeout=int(cfg.get("timeout", 30)),
+        )
     return TempMailClient(
         base_url=(cfg.get("base_url") or "").strip(),
         admin_password=(cfg.get("admin_password") or "").strip(),

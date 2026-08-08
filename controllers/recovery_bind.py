@@ -12,9 +12,36 @@ B) OAuth 冷登录验证已绑定邮箱（Fluent 新 UI）
    3. 保持登录状态？
       button[data-testid=secondaryButton]「否」
 """
+import os
+import threading
 import time
 
 from controllers.temp_mail import client_from_config
+
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Results')
+_RECOVERY_RECORD_LOCK = threading.Lock()
+
+
+def save_recovery_record(account_email, account_password, recovery_address, log=None):
+    """把 账号→辅助邮箱 绑定关系追加写入 Results/recovery_emails.txt（线程安全）。
+
+    格式：outlook邮箱----密码----辅助邮箱
+    """
+    if not recovery_address:
+        return False
+    try:
+        os.makedirs(RESULTS_DIR, exist_ok=True)
+        line = f"{account_email or ''}----{account_password or ''}----{recovery_address}\n"
+        with _RECOVERY_RECORD_LOCK:
+            with open(os.path.join(RESULTS_DIR, 'recovery_emails.txt'), 'a', encoding='utf-8') as f:
+                f.write(line)
+        if log:
+            log('recovery_save', f'已记录辅助邮箱绑定: {line.strip()}', 'OK')
+        return True
+    except Exception as exc:
+        if log:
+            log('recovery_save', f'保存辅助邮箱记录失败: {exc}', 'WARN')
+        return False
 
 # --- 绑定页 ---
 BACKUP_EMAIL_SELECTOR = "#EmailAddress"
@@ -293,8 +320,10 @@ def _skip_protect(page, log):
     return False
 
 
-def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120):
+def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=None):
     """在保护帐户页绑定备用邮箱并输入验证码。
+
+    name: 可选，指定邮箱前缀（本地部分）。不传则自动生成。
 
     成功返回 (True, session_dict)，session 含 address/jwt 供 OAuth 冷登录复用。
     失败返回 (False, None)。
@@ -318,7 +347,7 @@ def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120):
 
     client = client_from_config(temp_mail_cfg or {})
     try:
-        addr, jwt = client.create_address()
+        addr, jwt = client.create_address(name=name)
     except Exception as exc:
         _log("recovery", f"创建临时邮箱失败: {exc}", "FAIL")
         _skip_protect(page, log)

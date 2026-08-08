@@ -83,7 +83,10 @@ def _login_and_get_token(page, email, password, prefix='', failure_hook=None, lo
 
     返回: (True, refresh_token) 或 (False, None)
     """
-    from controllers.oauth2 import _handle_protect_account, _handle_proof_verify, _handle_kmsi
+    from controllers.oauth2 import _handle_protect_account, _handle_proof_verify, _handle_kmsi, _ACCOUNT_CTX
+    # 记录当前任务账号，供保护帐户页绑定成功后保存 账号→辅助邮箱 记录
+    _ACCOUNT_CTX.email = email
+    _ACCOUNT_CTX.password = password
     # NEW 路径：若已注入注册 cookie，prefer_sso 有助于直接 consent；勿强制 sso_reload
     auth_url = build_auth_url(prefer_sso=True)
     captured_code = [None]
