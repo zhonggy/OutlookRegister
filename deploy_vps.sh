@@ -8,7 +8,6 @@
 #
 # 可选环境变量（不传则生成模板后手动编辑）：
 #   SUBSCRIPTIONS="url1,url2,url3"   订阅地址（逗号分隔）
-#   MGMT_PASSWORD="xxx"              easy_proxies 管理端密码（公网监听时强烈建议填写）
 #   MGMT_LISTEN="0.0.0.0:9091"       WebUI 监听地址（默认允许 VPS 外部访问）
 #   PORT_END=24024                   端口池上限（默认 24024）
 #   TEMP_MAIL="1"                    写 cloud_mail 临时邮箱配置到 config.json（配合下面4个必填）
@@ -18,15 +17,15 @@
 # ============================================================
 set -euo pipefail
 
-EP_VERSION="v2.2.1"
-EP_ASSET="easy_proxies-v2.2.1-linux-amd64"
-EP_RELEASE_URL="https://github.com/daimon3332/easy-proxies/releases/download/${EP_VERSION}/${EP_ASSET}"
+GO_VERSION="1.26.5"
+EP_REPO="https://github.com/zhonggy/easy-proxies.git"
+EP_BUILD_DIR="/opt/easy_proxies/src"
 OR_REPO="https://github.com/zhonggy/OutlookRegister.git"
 EP_DIR="/opt/easy_proxies"
 OR_DIR="/opt/OutlookRegister"
+GO_DIR="/opt/go"
 
 SUBS="${SUBSCRIPTIONS:-}"
-MGMT_PASS="${MGMT_PASSWORD:-}"
 MGMT_LISTEN="${MGMT_LISTEN:-0.0.0.0:9091}"
 PORT_END="${PORT_END:-24024}"
 TASKS="${TASKS:-100}"
@@ -44,15 +43,33 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq git curl wget python3 python3-venv python3-pip >/dev/null
 
-# ---------- 1. easy_proxies ----------
-log "部署 easy_proxies ${EP_VERSION}"
+# ---------- 1. easy_proxies（源码编译，含 WebUI 首次访问创建管理员） ----------
+log "部署 easy_proxies（源码编译）"
 mkdir -p "${EP_DIR}/logs"
+
 if [ ! -x "${EP_DIR}/easy_proxies" ]; then
-    wget -q "${EP_RELEASE_URL}" -O "${EP_DIR}/easy_proxies"
+    # 安装 Go（项目要求 Go 1.24+）
+    if [ ! -x "${GO_DIR}/go/bin/go" ]; then
+        log "安装 Go ${GO_VERSION}"
+        mkdir -p "${GO_DIR}"
+        wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz
+        tar -C "${GO_DIR}" -xzf /tmp/go.tar.gz
+        rm -f /tmp/go.tar.gz
+    fi
+    export PATH="${GO_DIR}/go/bin:$PATH"
+    export GOPROXY="https://goproxy.cn,direct"
+
+    if [ ! -d "${EP_BUILD_DIR}/.git" ]; then
+        git clone -q "${EP_REPO}" "${EP_BUILD_DIR}"
+    else
+        git -C "${EP_BUILD_DIR}" pull -q || true
+    fi
+    log "编译 easy_proxies（sing-box 依赖较多，首次约 5-10 分钟）"
+    (cd "${EP_BUILD_DIR}" && CGO_ENABLED=0 go build -tags "with_utls with_quic with_grpc" -o "${EP_DIR}/easy_proxies" .)
     chmod +x "${EP_DIR}/easy_proxies"
-    log "已下载 easy_proxies 二进制"
+    log "easy_proxies 编译完成"
 else
-    log "easy_proxies 已存在，跳过下载"
+    log "easy_proxies 二进制已存在，跳过编译"
 fi
 
 if [ ! -f "${EP_DIR}/config.yaml" ]; then
@@ -78,7 +95,8 @@ if [ ! -f "${EP_DIR}/config.yaml" ]; then
         echo "    enabled: true"
         echo "    listen: ${MGMT_LISTEN}"
         echo "    probe_target: https://www.gstatic.com/generate_204"
-        echo "    password: \"${MGMT_PASS}\""
+        echo "    password: """
+        echo "    pprof_enabled: false"
         echo "subscription_refresh:"
         echo "    enabled: true"
         echo "    interval: 1h0m0s"
@@ -113,21 +131,16 @@ if [ ! -f "${EP_DIR}/config.yaml" ]; then
     fi
 else
     log "config.yaml 已存在，保留订阅配置"
-    # 更新管理端监听地址；不会修改订阅、节点池等其他配置。
+    # 仅更新管理端监听地址；账号密码由首次访问 WebUI 时创建（不写回本文件）
     if grep -qE '^management:' "${EP_DIR}/config.yaml"; then
         sed -i -E "/^management:/,/^[^[:space:]]/ s|^([[:space:]]+)listen:.*|\\1listen: ${MGMT_LISTEN}|" "${EP_DIR}/config.yaml" || true
-        if [ -n "${MGMT_PASS}" ]; then
-            sed -i -E "/^management:/,/^[^[:space:]]/ s|^([[:space:]]+)password:.*|\\1password: \"${MGMT_PASS}\"|" "${EP_DIR}/config.yaml" || true
-        fi
         log "已更新 management.listen=${MGMT_LISTEN}"
     else
         warn "config.yaml 没有 management 配置，请手动设置 management.listen=${MGMT_LISTEN}"
     fi
 fi
 
-if [[ "${MGMT_LISTEN}" == "0.0.0.0:"* && -z "${MGMT_PASS}" ]]; then
-    warn "管理端已公网监听但未设置 MGMT_PASSWORD，建议立即设置密码并限制防火墙来源 IP"
-fi
+warn "WebUI 监听 ${MGMT_LISTEN}（公网可访问）。首次访问 http://VPS_IP:9091 时请在网页上创建管理员账号和密码。"
 
 log "配置 systemd 服务 easy_proxies"
 cat > /etc/systemd/system/easy_proxies.service <<EOF
@@ -248,6 +261,8 @@ systemctl status easy_proxies --no-pager | head -6 || true
 echo
 echo "======================================================"
 echo " 部署完成！接下来："
+echo " 0) 打开浏览器访问 http://VPS_IP:9091 （首次访问需在网页上创建管理员账号+密码）"
+echo "    在 WebUI 里粘贴订阅、等节点测试、确认多端口就绪"
 echo " 1) 等节点测试：  tail -f ${EP_DIR}/logs/easy_proxies.log"
 echo "    ss -tlnp | grep 24000    （看端口池就绪）"
 echo " 2) 确认通过节点数 N，若实际端口 > ${PORT_END}，改 ${OR_DIR}/config.json 的 port_end"
