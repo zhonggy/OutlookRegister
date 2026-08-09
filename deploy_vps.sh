@@ -276,23 +276,45 @@ RestartSec=30
 WantedBy=multi-user.target
 EOF
 
+log "配置 systemd 服务 outlook_register_web（Web 控制台，端口 9090）"
+cat > /etc/systemd/system/outlook_register_web.service <<EOF
+[Unit]
+Description=OutlookRegister Web Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${OR_DIR}
+ExecStart=${OR_DIR}/.venv/bin/python web_console.py --host 0.0.0.0 --port 9090
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # ---------- 3. 启动 ----------
 systemctl daemon-reload
-systemctl enable -q easy_proxies outlook_register 2>/dev/null || true
+systemctl enable -q easy_proxies outlook_register outlook_register_web 2>/dev/null || true
 systemctl restart easy_proxies
 log "easy_proxies 已启动（节点测试需要几分钟，之后 24000+ 端口才会监听）"
+systemctl restart outlook_register_web
+log "Web 控制台已启动: http://VPS_IP:9090"
 systemctl status easy_proxies --no-pager | head -6 || true
 
 echo
 echo "======================================================"
 echo " 部署完成！接下来："
-echo " 0) 打开浏览器访问 http://VPS_IP:9091 （首次访问需在网页上创建管理员账号+密码）"
+echo " 0) 打开浏览器访问 http://VPS_IP:9090 （OutlookRegister Web 控制台，首次访问创建管理员）"
+echo "    在此配置 config.json、启动注册、查看日志、下载成果"
+echo " 1) 打开浏览器访问 http://VPS_IP:9091 （easy_proxies 代理池，首次访问创建管理员）"
 echo "    在 WebUI 里粘贴订阅、等节点测试、确认多端口就绪"
-echo " 1) 等节点测试：  tail -f ${EP_DIR}/logs/easy_proxies.log"
+echo " 2) 等节点测试：  tail -f ${EP_DIR}/logs/easy_proxies.log"
 echo "    ss -tlnp | grep 24000    （看端口池就绪）"
-echo " 2) 确认通过节点数 N，若实际端口 > ${PORT_END}，改 ${OR_DIR}/config.json 的 port_end"
-echo " 3) 检查 ${OR_DIR}/config.json（temp_mail 密码等）"
-echo " 4) 跑一批：     systemctl start outlook_register"
+echo " 3) 确认通过节点数 N，若实际端口 > ${PORT_END}，改 Web 控制台系统设置里的 port_end"
+echo " 4) 检查 Web 控制台系统设置（temp_mail 密码等）"
+echo " 5) 在 Web 控制台点开始注册，或 systemctl start outlook_register"
 echo "    看日志：     journalctl -u outlook_register -f"
-echo " 5) 结果：       ${OR_DIR}/Results/oauth2.txt"
+echo " 6) 结果：       ${OR_DIR}/Results/oauth2.txt（Web 控制台可下载）"
 echo "======================================================"

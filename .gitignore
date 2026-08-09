@@ -10,6 +10,7 @@ browser_profiles/
 # Local secrets & runtime data (never commit)
 config.json
 config.local.json
+admin.json          # Web 控制台管理员凭据（bcrypt 哈希）
 Results/
 !Results/.gitkeep
 
