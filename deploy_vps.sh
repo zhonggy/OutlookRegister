@@ -8,7 +8,8 @@
 #
 # 可选环境变量（不传则生成模板后手动编辑）：
 #   SUBSCRIPTIONS="url1,url2,url3"   订阅地址（逗号分隔）
-#   MGMT_PASSWORD="xxx"              easy_proxies 管理端密码
+#   MGMT_PASSWORD="xxx"              easy_proxies 管理端密码（公网监听时强烈建议填写）
+#   MGMT_LISTEN="0.0.0.0:9091"       WebUI 监听地址（默认允许 VPS 外部访问）
 #   PORT_END=24024                   端口池上限（默认 24024）
 #   TEMP_MAIL="1"                    写 cloud_mail 临时邮箱配置到 config.json（配合下面4个必填）
 #   TEMP_MAIL_URL / TEMP_MAIL_ADMIN / TEMP_MAIL_PASS / TEMP_MAIL_DOMAIN
@@ -26,6 +27,7 @@ OR_DIR="/opt/OutlookRegister"
 
 SUBS="${SUBSCRIPTIONS:-}"
 MGMT_PASS="${MGMT_PASSWORD:-}"
+MGMT_LISTEN="${MGMT_LISTEN:-0.0.0.0:9091}"
 PORT_END="${PORT_END:-24024}"
 TASKS="${TASKS:-100}"
 HEADLESS="${HEADLESS:-1}"
@@ -74,7 +76,7 @@ if [ ! -f "${EP_DIR}/config.yaml" ]; then
         echo "    rotation_interval: 2m0s"
         echo "management:"
         echo "    enabled: true"
-        echo "    listen: 127.0.0.1:9091"
+        echo "    listen: ${MGMT_LISTEN}"
         echo "    probe_target: https://www.gstatic.com/generate_204"
         echo "    password: \"${MGMT_PASS}\""
         echo "subscription_refresh:"
@@ -110,7 +112,21 @@ if [ ! -f "${EP_DIR}/config.yaml" ]; then
         warn "未提供 SUBSCRIPTIONS → 请编辑 ${EP_DIR}/config.yaml 填入订阅地址（subscriptions: 段）"
     fi
 else
-    log "config.yaml 已存在，保留（如需订阅刷新请自行确认 subscriptions 段）"
+    log "config.yaml 已存在，保留订阅配置"
+    # 更新管理端监听地址；不会修改订阅、节点池等其他配置。
+    if grep -qE '^management:' "${EP_DIR}/config.yaml"; then
+        sed -i -E "/^management:/,/^[^[:space:]]/ s|^([[:space:]]+)listen:.*|\\1listen: ${MGMT_LISTEN}|" "${EP_DIR}/config.yaml" || true
+        if [ -n "${MGMT_PASS}" ]; then
+            sed -i -E "/^management:/,/^[^[:space:]]/ s|^([[:space:]]+)password:.*|\\1password: \"${MGMT_PASS}\"|" "${EP_DIR}/config.yaml" || true
+        fi
+        log "已更新 management.listen=${MGMT_LISTEN}"
+    else
+        warn "config.yaml 没有 management 配置，请手动设置 management.listen=${MGMT_LISTEN}"
+    fi
+fi
+
+if [[ "${MGMT_LISTEN}" == "0.0.0.0:"* && -z "${MGMT_PASS}" ]]; then
+    warn "管理端已公网监听但未设置 MGMT_PASSWORD，建议立即设置密码并限制防火墙来源 IP"
 fi
 
 log "配置 systemd 服务 easy_proxies"
