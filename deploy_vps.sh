@@ -9,6 +9,7 @@
 # 可选环境变量（不传则生成模板后手动编辑）：
 #   SUBSCRIPTIONS="url1,url2,url3"   订阅地址（逗号分隔）
 #   MGMT_LISTEN="0.0.0.0:9091"       WebUI 监听地址（默认允许 VPS 外部访问）
+#   EP_REBUILD=1                     强制重新编译 easy_proxies（旧版升级时用）
 #   PORT_END=24024                   端口池上限（默认 24024）
 #   TEMP_MAIL="1"                    写 cloud_mail 临时邮箱配置到 config.json（配合下面4个必填）
 #   TEMP_MAIL_URL / TEMP_MAIL_ADMIN / TEMP_MAIL_PASS / TEMP_MAIL_DOMAIN
@@ -47,7 +48,31 @@ apt-get install -y -qq git curl wget python3 python3-venv python3-pip >/dev/null
 log "部署 easy_proxies（源码编译）"
 mkdir -p "${EP_DIR}/logs"
 
+# 决定是否需要编译/重编译：
+#   - 二进制不存在（首次部署）
+#   - EP_REBUILD=1（强制，旧版部署升级时用）
+#   - 源码 pull 后 commit 与上次编译的不同（日常更新）
+NEED_BUILD=0
 if [ ! -x "${EP_DIR}/easy_proxies" ]; then
+    NEED_BUILD=1
+elif [ "${EP_REBUILD:-0}" = "1" ]; then
+    NEED_BUILD=1
+    log "EP_REBUILD=1 → 强制重新编译"
+elif [ -d "${EP_BUILD_DIR}/.git" ]; then
+    git -C "${EP_BUILD_DIR}" pull -q || true
+    CUR=$(git -C "${EP_BUILD_DIR}" rev-parse HEAD 2>/dev/null || echo "")
+    BUILT=$(cat "${EP_DIR}/.built_commit" 2>/dev/null || echo "")
+    if [ -n "${CUR}" ] && [ "${CUR}" != "${BUILT}" ]; then
+        NEED_BUILD=1
+        log "检测到 easy_proxies 源码更新（${BUILT} → ${CUR}）"
+    else
+        log "easy_proxies 已是最新（${CUR}），跳过编译"
+    fi
+else
+    warn "easy_proxies 二进制已存在但无源码目录（旧版部署？）。如需升级请用 EP_REBUILD=1"
+fi
+
+if [ "${NEED_BUILD}" = "1" ]; then
     # 安装 Go（项目要求 Go 1.24+）
     if [ ! -x "${GO_DIR}/go/bin/go" ]; then
         log "安装 Go ${GO_VERSION}"
@@ -67,9 +92,9 @@ if [ ! -x "${EP_DIR}/easy_proxies" ]; then
     log "编译 easy_proxies（sing-box 依赖较多，首次约 5-10 分钟）"
     (cd "${EP_BUILD_DIR}" && CGO_ENABLED=0 go build -tags "with_utls with_quic with_grpc" -o "${EP_DIR}/easy_proxies" .)
     chmod +x "${EP_DIR}/easy_proxies"
+    CUR=$(git -C "${EP_BUILD_DIR}" rev-parse HEAD 2>/dev/null || echo "")
+    [ -n "${CUR}" ] && echo "${CUR}" > "${EP_DIR}/.built_commit"
     log "easy_proxies 编译完成"
-else
-    log "easy_proxies 二进制已存在，跳过编译"
 fi
 
 if [ ! -f "${EP_DIR}/config.yaml" ]; then
