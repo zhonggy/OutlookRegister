@@ -11,27 +11,18 @@
 curl -fsSL https://raw.githubusercontent.com/zhonggy/OutlookRegister/main/deploy_vps.sh | sudo bash
 ```
 
-### 带参数部署（推荐）
+> ⚠️ 9091 代理池是官方版认证，**没有首次创建密码**：部署后必须设置 `management.password`，否则 9091 无密码开放。
+> 方式一：部署时带密码 `curl ... | sudo MGMT_PASSWORD="你的密码" bash`
+> 方式二：部署后 `sudo nano /opt/easy_proxies/config.yaml` 改 management.password
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/zhonggy/OutlookRegister/main/deploy_vps.sh | sudo \
-  SUBSCRIPTIONS="https://订阅1,https://订阅2" \
-  MGMT_PASSWORD="你的9091密码" \
-  PORT_END=24024 \
-  TASKS=100 \
-  bash
-```
-
-### 环境变量说明
+### 可选环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `SUBSCRIPTIONS` | 空 | 代理订阅地址，逗号分隔（不传则部署后在 WebUI 添加） |
-| `MGMT_PASSWORD` | 空 | easy_proxies 9091 管理端登录密码（**建议必填**） |
-| `MGMT_LISTEN` | `0.0.0.0:9091` | 9091 监听地址（公网可访问） |
+| `MGMT_PASSWORD` | 空 | easy_proxies 9091 密码（**建议必填**，否则无密码开放） |
 | `PORT_END` | `24024` | 注册机端口池上限（按实际节点数调整） |
 | `TASKS` | `100` | 注册任务数（可在控制台改） |
-| `HEADLESS` | `1` | 无头模式（VPS 必须为 1） |
 | `TEMP_MAIL=1` | 关 | 启用临时邮箱，配合 `TEMP_MAIL_URL / TEMP_MAIL_ADMIN / TEMP_MAIL_PASS / TEMP_MAIL_DOMAIN` |
 
 ---
