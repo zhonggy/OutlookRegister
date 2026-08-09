@@ -155,6 +155,18 @@ def _run_log_tail() -> str:
         return ""
 
 
+def _clear_log_and_stats() -> dict:
+    """清空运行日志文件，并重置进度统计基准（失败/成功从 0 重新计数）。"""
+    try:
+        open(RUN_LOG, "w").close()
+    except Exception:
+        pass
+    with _runtime["log_lock"]:
+        _runtime["log_offset"] = 0
+    _runtime["base_oauth_lines"] = _line_count(OAUTH_FILE)
+    return {"message": "已清空日志与进度统计"}
+
+
 def _register_status() -> dict:
     with _runtime["proc_lock"]:
         proc = _runtime["proc"]
@@ -417,6 +429,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed():
                 return self._send_json({"error": "未登录"}, 401)
             return self._send_json({"text": _run_log_tail()})
+        if path == "/api/logs/clear":
+            if not self._authed():
+                return self._send_json({"error": "未登录"}, 401)
+            return self._send_json(self._clear_log_and_stats())
         return self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -477,6 +493,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/register/check":
             return self._send_json(_check_connectivity())
+
+        if path == "/api/logs/clear":
+            if not self._authed():
+                return self._send_json({"error": "未登录"}, 401)
+            return self._send_json(_clear_log_and_stats())
 
         return self._send_json({"error": "not found"}, 404)
 
@@ -801,7 +822,7 @@ async function renderRegister(main){
     </div>
     </div>
     <div class="card">
-      <h3>实时日志 <button class="btn ghost sm" onclick="clearLogView()">清空显示</button></h3>
+      <h3>实时日志 <button class="btn ghost sm" onclick="clearLogView()">清空日志与进度</button></h3>
       <div class="log-box" id="logBox"><span class="dim">等待日志输出...</span></div>
     </div>`;
   logOffset=0;
@@ -846,7 +867,21 @@ function colorize(raw){
   s=s.replace(/(\[WARN\]|警告)/g,'<span class="warn">$1</span>');
   return s;
 }
-function clearLogView(){const box=$('logBox');if(box)box.innerHTML='';logLines=[]}
+async function clearLogView(){
+  // 清空日志文件 + 重置统计基准（后端）
+  try{await api('/api/logs/clear',{method:'POST'})}catch(e){}
+  // 清空日志显示
+  const box=$('logBox');
+  if(box)box.innerHTML='<span class="dim">等待日志输出...</span>';
+  logLines=[];
+  // 重置进度 UI
+  const pill=$('progPill'); if(pill){pill.textContent='等待启动';pill.className='pill'}
+  const bar=$('progBar'); if(bar)bar.style.width='0%';
+  if($('progFrac'))$('progFrac').textContent='0/0';
+  if($('progDone'))$('progDone').textContent='0';
+  if($('progOk'))$('progOk').textContent='0';
+  if($('progFail'))$('progFail').textContent='0';
+}
 async function refreshProgress(){
   try{
     const st=await api('/api/register/status');
