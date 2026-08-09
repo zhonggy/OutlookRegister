@@ -9,7 +9,7 @@
 # 可选环境变量（不传则生成模板后手动编辑）：
 #   SUBSCRIPTIONS="url1,url2,url3"   订阅地址（逗号分隔）
 #   MGMT_LISTEN="0.0.0.0:9091"       WebUI 监听地址（默认允许 VPS 外部访问）
-#   EP_REBUILD=1                     强制重新编译 easy_proxies（旧版升级时用）
+#   MGMT_PASSWORD="xxx"              easy_proxies 9091 登录密码（官方版认证）
 #   PORT_END=24024                   端口池上限（默认 24024）
 #   TEMP_MAIL="1"                    写 cloud_mail 临时邮箱配置到 config.json（配合下面4个必填）
 #   TEMP_MAIL_URL / TEMP_MAIL_ADMIN / TEMP_MAIL_PASS / TEMP_MAIL_DOMAIN
@@ -18,16 +18,16 @@
 # ============================================================
 set -euo pipefail
 
-GO_VERSION="1.26.5"
-EP_REPO="https://github.com/zhonggy/easy-proxies.git"
-EP_BUILD_DIR="/opt/easy_proxies/src"
+EP_VERSION="v2.2.1"
+EP_ASSET="easy_proxies-v2.2.1-linux-amd64"
+EP_RELEASE_URL="https://github.com/daimon3332/easy-proxies/releases/download/${EP_VERSION}/${EP_ASSET}"
 OR_REPO="https://github.com/zhonggy/OutlookRegister.git"
 EP_DIR="/opt/easy_proxies"
 OR_DIR="/opt/OutlookRegister"
-GO_DIR="/opt/go"
 
 SUBS="${SUBSCRIPTIONS:-}"
 MGMT_LISTEN="${MGMT_LISTEN:-0.0.0.0:9091}"
+MGMT_PASSWORD="${MGMT_PASSWORD:-}"
 PORT_END="${PORT_END:-24024}"
 TASKS="${TASKS:-100}"
 HEADLESS="${HEADLESS:-1}"
@@ -44,57 +44,19 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq git curl wget python3 python3-venv python3-pip >/dev/null
 
-# ---------- 1. easy_proxies（源码编译，含 WebUI 首次访问创建管理员） ----------
-log "部署 easy_proxies（源码编译）"
+# ---------- 1. easy_proxies（官方 release，v2.2.1） ----------
+# 注意：不用 fork 源码编译——fork main 分支的 sing-box DNS 有 bug
+# （节点域名解析 context canceled，所有节点流量失败），官方 release 正常。
+log "部署 easy_proxies ${EP_VERSION}（官方 release）"
 mkdir -p "${EP_DIR}/logs"
 
-# 决定是否需要编译/重编译：
-#   - 二进制不存在（首次部署）
-#   - EP_REBUILD=1（强制，旧版部署升级时用）
-#   - 源码 pull 后 commit 与上次编译的不同（日常更新）
-NEED_BUILD=0
 if [ ! -x "${EP_DIR}/easy_proxies" ]; then
-    NEED_BUILD=1
-elif [ "${EP_REBUILD:-0}" = "1" ]; then
-    NEED_BUILD=1
-    log "EP_REBUILD=1 → 强制重新编译"
-elif [ -d "${EP_BUILD_DIR}/.git" ]; then
-    git -C "${EP_BUILD_DIR}" pull -q || true
-    CUR=$(git -C "${EP_BUILD_DIR}" rev-parse HEAD 2>/dev/null || echo "")
-    BUILT=$(cat "${EP_DIR}/.built_commit" 2>/dev/null || echo "")
-    if [ -n "${CUR}" ] && [ "${CUR}" != "${BUILT}" ]; then
-        NEED_BUILD=1
-        log "检测到 easy_proxies 源码更新（${BUILT} → ${CUR}）"
-    else
-        log "easy_proxies 已是最新（${CUR}），跳过编译"
-    fi
-else
-    warn "easy_proxies 二进制已存在但无源码目录（旧版部署？）。如需升级请用 EP_REBUILD=1"
-fi
-
-if [ "${NEED_BUILD}" = "1" ]; then
-    # 安装 Go（项目要求 Go 1.24+）
-    if [ ! -x "${GO_DIR}/go/bin/go" ]; then
-        log "安装 Go ${GO_VERSION}"
-        mkdir -p "${GO_DIR}"
-        wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz
-        tar -C "${GO_DIR}" -xzf /tmp/go.tar.gz
-        rm -f /tmp/go.tar.gz
-    fi
-    export PATH="${GO_DIR}/go/bin:$PATH"
-    export GOPROXY="https://goproxy.cn,direct"
-
-    if [ ! -d "${EP_BUILD_DIR}/.git" ]; then
-        git clone -q "${EP_REPO}" "${EP_BUILD_DIR}"
-    else
-        git -C "${EP_BUILD_DIR}" pull -q || true
-    fi
-    log "编译 easy_proxies（sing-box 依赖较多，首次约 5-10 分钟）"
-    (cd "${EP_BUILD_DIR}" && CGO_ENABLED=0 go build -tags "with_utls with_quic with_grpc with_clash_api" -o "${EP_DIR}/easy_proxies" .)
+    log "下载 easy_proxies ${EP_VERSION} 官方二进制"
+    wget -q "${EP_RELEASE_URL}" -O "${EP_DIR}/easy_proxies"
     chmod +x "${EP_DIR}/easy_proxies"
-    CUR=$(git -C "${EP_BUILD_DIR}" rev-parse HEAD 2>/dev/null || echo "")
-    [ -n "${CUR}" ] && echo "${CUR}" > "${EP_DIR}/.built_commit"
-    log "easy_proxies 编译完成"
+    log "easy_proxies 下载完成"
+else
+    log "easy_proxies 二进制已存在，跳过下载"
 fi
 
 if [ ! -f "${EP_DIR}/config.yaml" ]; then
@@ -120,7 +82,7 @@ if [ ! -f "${EP_DIR}/config.yaml" ]; then
         echo "    enabled: true"
         echo "    listen: ${MGMT_LISTEN}"
         echo "    probe_target: https://www.gstatic.com/generate_204"
-        echo "    password: """
+        echo "    password: \"${MGMT_PASSWORD}\""
         echo "    pprof_enabled: false"
         echo "subscription_refresh:"
         echo "    enabled: true"
@@ -154,18 +116,29 @@ if [ ! -f "${EP_DIR}/config.yaml" ]; then
     if [ -z "${SUBS}" ]; then
         warn "未提供 SUBSCRIPTIONS → 请编辑 ${EP_DIR}/config.yaml 填入订阅地址（subscriptions: 段）"
     fi
+    if [ -z "${MGMT_PASSWORD}" ]; then
+        warn "未设置 MGMT_PASSWORD → 9091 管理端无密码开放，强烈建议设置：sudo nano ${EP_DIR}/config.yaml 的 management.password"
+    fi
 else
     log "config.yaml 已存在，保留订阅配置"
-    # 仅更新管理端监听地址；账号密码由首次访问 WebUI 时创建（不写回本文件）
+    # 更新管理端监听地址（不覆盖订阅/节点配置）
     if grep -qE '^management:' "${EP_DIR}/config.yaml"; then
         sed -i -E "/^management:/,/^[^[:space:]]/ s|^([[:space:]]+)listen:.*|\\1listen: ${MGMT_LISTEN}|" "${EP_DIR}/config.yaml" || true
+        # 传了 MGMT_PASSWORD 才更新密码（官方版认证）
+        if [ -n "${MGMT_PASSWORD}" ]; then
+            sed -i -E "/^management:/,/^[^[:space:]]/ s|^([[:space:]]+)password:.*|\\1password: \"${MGMT_PASSWORD}\"|" "${EP_DIR}/config.yaml" || true
+        fi
         log "已更新 management.listen=${MGMT_LISTEN}"
     else
         warn "config.yaml 没有 management 配置，请手动设置 management.listen=${MGMT_LISTEN}"
     fi
 fi
 
-warn "WebUI 监听 ${MGMT_LISTEN}（公网可访问）。首次访问 http://VPS_IP:9091 时请在网页上创建管理员账号和密码。"
+if [ -z "${MGMT_PASSWORD}" ] && ! grep -qE '^[[:space:]]+password: "[^"]+"' "${EP_DIR}/config.yaml"; then
+    warn "9091 管理端密码为空，强烈建议设置：MGMT_PASSWORD=xxx 重跑本脚本，或手动编辑 management.password"
+fi
+
+warn "easy_proxies 官方版认证：9091 登录密码为 config.yaml 的 management.password（不是网页创建管理员）"
 
 log "配置 systemd 服务 easy_proxies"
 cat > /etc/systemd/system/easy_proxies.service <<EOF
