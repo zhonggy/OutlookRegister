@@ -8,22 +8,11 @@
 ## 🚀 一键部署
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zhonggy/OutlookRegister/main/deploy_vps.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/zhonggy/OutlookRegister/main/deploy_vps.sh | sudo MGMT_PASSWORD="你的9091密码" bash
 ```
 
-> ⚠️ 9091 代理池是官方版认证，**没有首次创建密码**：部署后必须设置 `management.password`，否则 9091 无密码开放。
-> 方式一：部署时带密码 `curl ... | sudo MGMT_PASSWORD="你的密码" bash`
-> 方式二：部署后 `sudo nano /opt/easy_proxies/config.yaml` 改 management.password
-
-### 可选环境变量
-
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `SUBSCRIPTIONS` | 空 | 代理订阅地址，逗号分隔（不传则部署后在 WebUI 添加） |
-| `MGMT_PASSWORD` | 空 | easy_proxies 9091 密码（**建议必填**，否则无密码开放） |
-| `PORT_END` | `24024` | 注册机端口池上限（按实际节点数调整） |
-| `TASKS` | `100` | 注册任务数（可在控制台改） |
-| `TEMP_MAIL=1` | 关 | 启用临时邮箱，配合 `TEMP_MAIL_URL / TEMP_MAIL_ADMIN / TEMP_MAIL_PASS / TEMP_MAIL_DOMAIN` |
+> ⚠️ 9091 代理池是官方版认证，**没有首次创建密码**：上面命令里的 `MGMT_PASSWORD` 就是 9091 登录密码（不设则无密码开放；也可部署后改 `/opt/easy_proxies/config.yaml` 的 management.password）。
+> 订阅地址部署后在 9091 WebUI 里添加；注册数量/并发在 9090 控制台里调。
 
 ---
 
