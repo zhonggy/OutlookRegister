@@ -170,7 +170,7 @@ def _register_status() -> dict:
     else:
         success = max(0, _line_count(OAUTH_FILE) - base)
         log_text = _run_log_tail()
-        failed = log_text.count("注册失败") + log_text.count("[REGISTER][FAIL]")
+        failed = log_text.count("[REGISTER][FAIL]")
         completed = success + failed
         percent = min(100, int(completed / task_total * 100)) if task_total > 0 else 0
 
@@ -374,7 +374,7 @@ class Handler(BaseHTTPRequestHandler):
                     recent.append({"email": parts[0], "token": parts[3][:24] + "..."})
             # 失败 / 跳过：从运行日志累计统计
             log_text = _run_log_tail()
-            failed = log_text.count("注册失败") + log_text.count("[REGISTER][FAIL]")
+            failed = log_text.count("[REGISTER][FAIL]")
             skipped = sum(int(m.group(1)) for m in re.finditer(r"放弃 (\d+) 个", log_text))
             return self._send_json({
                 "success": _line_count(OAUTH_FILE),
