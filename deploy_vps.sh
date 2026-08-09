@@ -90,7 +90,7 @@ if [ "${NEED_BUILD}" = "1" ]; then
         git -C "${EP_BUILD_DIR}" pull -q || true
     fi
     log "编译 easy_proxies（sing-box 依赖较多，首次约 5-10 分钟）"
-    (cd "${EP_BUILD_DIR}" && CGO_ENABLED=0 go build -tags "with_utls with_quic with_grpc" -o "${EP_DIR}/easy_proxies" .)
+    (cd "${EP_BUILD_DIR}" && CGO_ENABLED=0 go build -tags "with_utls with_quic with_grpc with_clash_api" -o "${EP_DIR}/easy_proxies" .)
     chmod +x "${EP_DIR}/easy_proxies"
     CUR=$(git -C "${EP_BUILD_DIR}" rev-parse HEAD 2>/dev/null || echo "")
     [ -n "${CUR}" ] && echo "${CUR}" > "${EP_DIR}/.built_commit"
