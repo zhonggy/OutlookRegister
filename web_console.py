@@ -303,11 +303,16 @@ def _start_register(tasks: int, concurrent: int) -> str:
         os.makedirs(LOG_DIR, exist_ok=True)
         logf = open(RUN_LOG, "a", encoding="utf-8", buffering=1)
         logf.write(f"\n===== [{time.strftime('%Y-%m-%d %H:%M:%S')}] 启动注册 tasks={tasks} concurrent={concurrent} =====\n")
+        # 强制子进程以 UTF-8 输出（Windows 默认 GBK，会导致日志乱码）
+        proc_env = dict(os.environ)
+        proc_env["PYTHONIOENCODING"] = "utf-8"
+        proc_env["PYTHONUTF8"] = "1"
         proc = subprocess.Popen(
             [sys.executable, "-u", "main.py"],
             cwd=BASE_DIR,
             stdout=logf,
             stderr=subprocess.STDOUT,
+            env=proc_env,
         )
         _runtime["proc"] = proc
         _runtime["task_total"] = tasks
