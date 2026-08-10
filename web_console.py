@@ -49,6 +49,7 @@ _runtime = {
     "started_at": None,
     "stopping": False,
     "log_offset": 0,
+    "log_pos": 0,
     "log_lock": threading.Lock(),
 }
 
@@ -147,12 +148,41 @@ def _save_config(cfg: dict):
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
-def _run_log_tail() -> str:
+def _run_log_tail(max_bytes: int = 1_000_000) -> str:
+    """读运行日志尾部（默认最多 1MB），避免全量读取大文件拖慢统计。"""
     try:
-        with open(RUN_LOG, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()
+        with open(RUN_LOG, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            data = f.read()
+        return data.decode("utf-8", errors="replace")
     except Exception:
         return ""
+
+
+def _read_log_incremental() -> list:
+    """从上次字节位置读日志新增行（增量，避免每次读全文件）。"""
+    with _runtime["log_lock"]:
+        pos = _runtime["log_pos"]
+        try:
+            with open(RUN_LOG, "rb") as f:
+                f.seek(pos)
+                data = f.read()
+                new_pos = f.tell()
+        except Exception:
+            data = b""
+            new_pos = 0
+        # 文件被清空/截断时重置位置
+        if new_pos < pos:
+            _runtime["log_pos"] = 0
+        else:
+            _runtime["log_pos"] = new_pos
+    text = data.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    return lines
 
 
 def _clear_log_and_stats() -> dict:
@@ -163,6 +193,7 @@ def _clear_log_and_stats() -> dict:
         pass
     with _runtime["log_lock"]:
         _runtime["log_offset"] = 0
+        _runtime["log_pos"] = 0
     _runtime["base_oauth_lines"] = _line_count(OAUTH_FILE)
     return {"message": "已清空日志与进度统计"}
 
@@ -274,6 +305,7 @@ def _start_register(tasks: int, concurrent: int) -> str:
         _runtime["stopping"] = False
         with _runtime["log_lock"]:
             _runtime["log_offset"] = 0
+            _runtime["log_pos"] = 0
     return "ok"
 
 
@@ -415,16 +447,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/logs":
             if not self._authed():
                 return self._send_json({"error": "未登录"}, 401)
-            try:
-                offset = int(self.headers.get("X-Log-Offset", 0))
-            except Exception:
-                offset = 0
-            text = _run_log_tail()
-            lines = text.split("\n")
-            with _runtime["log_lock"]:
-                new_lines = lines[offset:]
-                _runtime["log_offset"] = len(lines)
-            return self._send_json({"lines": new_lines, "offset": len(lines)})
+            # 增量读取（服务端维护字节位置，前端无需传 offset）
+            new_lines = _read_log_incremental()
+            return self._send_json({"lines": new_lines, "offset": 0})
         if path == "/api/logs/full":
             if not self._authed():
                 return self._send_json({"error": "未登录"}, 401)
@@ -830,13 +855,12 @@ async function renderRegister(main){
   if(pollTimer)clearInterval(pollTimer);
   pollTimer=setInterval(async()=>{
     try{
-      const r=await api('/api/logs',{headers:{'X-Log-Offset':String(logOffset)}});
+      const r=await api('/api/logs');
       if(r.lines&&r.lines.length){
         appendLog(r.lines.join('\n'));
-        logOffset=r.offset;
       }
     }catch(e){}
-  },1500);
+  },1000);
   await refreshProgress();
 }
 let logLines=[]; // 日志行缓存，最多保留 100 行，防止页面卡顿
