@@ -127,17 +127,20 @@ class OutlookController:
     # ============================================================
     @classmethod
     def _get_ip_info(cls, proxy_url):
-        """查询代理IP的地理信息：国家代码、时区、GPS坐标。结果缓存，同一代理只查一次。"""
-        if not proxy_url:
-            return {'country': '??', 'timezone': 'UTC', 'loc': None}
+        """查询出口 IP 的地理信息：国家代码、时区、GPS 坐标。结果缓存。
+
+        proxy_url 为空（直连模式）时查询本机出口 IP，key 用 '__direct__'。
+        """
+        key = proxy_url or '__direct__'
         with cls._state_lock:
-            if proxy_url in cls._ip_info_cache:
-                return cls._ip_info_cache[proxy_url]
+            if key in cls._ip_info_cache:
+                return cls._ip_info_cache[key]
         info = {'country': '??', 'timezone': 'UTC', 'loc': None}
         try:
             import requests
-            r = requests.get('https://ipinfo.io/json', proxies={'https': proxy_url},
-                             timeout=3, headers={'Accept': 'application/json'})
+            kwargs = {} if not proxy_url else {'proxies': {'https': proxy_url}}
+            r = requests.get('https://ipinfo.io/json', timeout=3,
+                             headers={'Accept': 'application/json'}, **kwargs)
             if r.status_code == 200:
                 d = r.json()
                 info = {
@@ -148,7 +151,7 @@ class OutlookController:
         except Exception:
             pass
         with cls._state_lock:
-            cls._ip_info_cache[proxy_url] = info
+            cls._ip_info_cache[key] = info
         return info
 
     def bump_failure(self, *names):
@@ -174,7 +177,7 @@ class OutlookController:
     def set_task_prefix(self, task_num, total):
         """设置当前线程的日志前缀： [编号/总-国家-IP] 并缓存IP地理信息"""
         proxy, info = self.prepare_thread_context()
-        ip_short = proxy.split('//')[-1] if '//' in proxy else proxy
+        ip_short = proxy.split('//')[-1] if '//' in proxy else (proxy or 'direct')
         self.thread_local._log_prefix = f"[{task_num}/{total}-{info['country']}-{ip_short}]"
 
     def log_event(self, flow, level, stage, message, attempt=None):
@@ -396,19 +399,30 @@ class OutlookController:
     # ============================================================
     @classmethod
     def _parse_proxy_config(cls, pc):
-        """解析代理配置：单端口 or 端口池。返回 {type, host, ports, max_per}"""
+        """解析代理配置：单端口 or 端口池。返回 {type, host, ports, max_per}
+
+        host 为空 = 直连模式（不走代理，如 VPS 本地可直连目标站时使用）。
+        """
         mode = pc.get('mode', 'single')
         proxy_type = pc.get('type', 'http')
-        host = pc.get('host', '127.0.0.1')
+        host = (pc.get('host') or '').strip()
+        if not host:
+            return {'type': proxy_type, 'host': '', 'ports': [], 'max_per': 0, 'direct': True}
         if mode == 'single':
             ports = [pc.get('single_port', 7890)]
         else:
             ports = list(range(pc.get('port_start', 24000), pc.get('port_end', 24064) + 1))
-        return {'type': proxy_type, 'host': host, 'ports': ports, 'max_per': pc.get('max_per_proxy', 20)}
+        return {'type': proxy_type, 'host': host, 'ports': ports, 'max_per': pc.get('max_per_proxy', 20), 'direct': False}
 
     def _pick_proxy(self):
-        """选择代理端口：两步——①过滤（排除用满的+烂IP）②加权随机（胜率高的优先）"""
+        """选择代理端口：两步——①过滤（排除用满的+烂IP）②加权随机（胜率高的优先）
+
+        直连模式（host 为空）直接返回空串，不挂代理。
+        """
         cfg = self._proxy_config
+        if cfg.get('direct'):
+            self.thread_local._proxy = ''
+            return ''
         with self._state_lock:
             available = []
             for p in cfg['ports']:
@@ -462,8 +476,9 @@ class OutlookController:
         # 混入代理端口 + 时间 + 随机，避免多任务共用同一设备指纹
         port_part = 0
         try:
-            hostport = proxy_url.split('//')[-1]
-            port_part = int(hostport.rsplit(':', 1)[-1])
+            if proxy_url:
+                hostport = proxy_url.split('//')[-1]
+                port_part = int(hostport.rsplit(':', 1)[-1])
         except Exception:
             pass
         seed = (int(time.time() * 1000) ^ (port_part * 2654435761) ^ random.getrandbits(32)) & 0x7FFFFFFF
@@ -565,8 +580,9 @@ class OutlookController:
             common = {
                 'headless': self.headless,
                 'args': args,
-                'proxy': {"server": proxy_url, "bypass": "localhost"},
             }
+            if proxy_url:
+                common['proxy'] = {"server": proxy_url, "bypass": "localhost"}
 
             exe = self.browser_executable_path
             profile_dir = None

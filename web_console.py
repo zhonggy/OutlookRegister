@@ -245,8 +245,19 @@ def _check_connectivity() -> dict:
     cfg = _load_config()
     proxy = cfg.get("proxy") or {}
     mode = proxy.get("mode", "single")
-    host = proxy.get("host", "127.0.0.1")
+    host = (proxy.get("host") or "").strip()
     proxy_type = proxy.get("type", "http")
+
+    # 直连模式：host 为空 → 直接测本机能否访问目标站
+    if not host:
+        try:
+            import urllib.request
+            r = urllib.request.urlopen(
+                "https://www.gstatic.com/generate_204", timeout=6)
+            return {"ok": r.status == 204, "detail": "直连模式：本机可访问网络（generate_204）", "mode": "direct"}
+        except Exception as e:
+            return {"ok": False, "detail": f"直连模式：网络不通 ({e.__class__.__name__})", "mode": "direct"}
+
     ports = []
     if mode == "single":
         p = proxy.get("single_port")
@@ -979,7 +990,7 @@ async function renderSettings(main){
           <option value="http" ${(p.type||'http')==='http'?'selected':''}>HTTP</option>
           <option value="socks5" ${p.type==='socks5'?'selected':''}>SOCKS5</option>
         </select></div>
-        <div class="field"><label>主机</label><input id="cfProxyHost" value="${esc(p.host||'127.0.0.1')}"></div>
+        <div class="field"><label>主机（留空 = 直连不走代理）</label><input id="cfProxyHost" value="${esc(p.host||'')}" placeholder="留空则 VPS 直连"></div>
         <div class="field"><label>单端口（single 模式）</label><input id="cfSinglePort" type="number" value="${p.single_port??0}"></div>
         <div class="field"><label>起始端口（multiple 模式）</label><input id="cfPortStart" type="number" value="${p.port_start??24000}"></div>
         <div class="field"><label>结束端口（multiple 模式）</label><input id="cfPortEnd" type="number" value="${p.port_end??24035}"></div>
