@@ -624,11 +624,24 @@ class OutlookController:
                 b = p.chromium.launch_persistent_context(profile_dir, **ctx_opts)
                 self.thread_local._persistent_context = True
             else:
-                # executable_path 为空：使用 patchright 自带 Chromium（A/B：对照指纹浏览器）
-                self.log_event(
-                    'BROWSER', 'INFO', 'launch',
-                    f"exe=patchright-chromium fp=false tz={tz} proxy={proxy_url.split('//')[-1]}"
-                )
+                # executable_path 为空：使用 patchright 自带 Chromium
+                # （支持 --fingerprint 指纹伪装，配置开启时启用）
+                if self.fingerprint_enabled:
+                    seed = self._make_fingerprint_seed(proxy_url)
+                    args.append(f'--fingerprint={seed}')
+                    if self.fingerprint_platform:
+                        args.append(f'--fingerprint-platform={self.fingerprint_platform}')
+                    if self.fingerprint_brand:
+                        args.append(f'--fingerprint-brand={self.fingerprint_brand}')
+                    self.log_event(
+                        'BROWSER', 'INFO', 'launch',
+                        f"exe=patchright-chromium fp=True seed={seed} platform={self.fingerprint_platform} brand={self.fingerprint_brand} tz={tz} proxy={proxy_url.split('//')[-1] if proxy_url else 'direct'}"
+                    )
+                else:
+                    self.log_event(
+                        'BROWSER', 'INFO', 'launch',
+                        f"exe=patchright-chromium fp=false tz={tz} proxy={proxy_url.split('//')[-1] if proxy_url else 'direct'}"
+                    )
                 b = p.chromium.launch(**common)
 
             self.thread_local._browser_profile_dir = profile_dir
