@@ -52,12 +52,12 @@ class OutlookController:
         self.headless = config_data.get('headless', False)
         self.email_suffix = config_data['email_suffix']
 
-        # 公开发行版：固定 patchright 自带 Chromium，不使用指纹/自定义浏览器
+        # 浏览器：支持从 config 开启 patchright 指纹（默认关闭，保持原行为）
         browser_cfg = config_data.get('browser', {}) or {}
-        self.browser_executable_path = ''  # 强制空 → patchright builtin
-        self.fingerprint_enabled = False
-        self.fingerprint_platform = 'windows'
-        self.fingerprint_brand = 'Chrome'
+        self.browser_executable_path = (browser_cfg.get('executable_path') or '').strip()
+        self.fingerprint_enabled = bool(browser_cfg.get('fingerprint_enabled', False))
+        self.fingerprint_platform = (browser_cfg.get('fingerprint_platform') or 'windows').strip() or 'windows'
+        self.fingerprint_brand = (browser_cfg.get('fingerprint_brand') or 'Chrome').strip() or 'Chrome'
         user_data_root = (browser_cfg.get('user_data_root') or '').strip()
         self.browser_user_data_root = user_data_root or os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -83,7 +83,8 @@ class OutlookController:
             self.log_dir,
             f"{time.strftime('%Y-%m-%d_%H-%M-%S')}_{os.getpid()}.txt"
         )
-        self.log_plain("[Browser] mode=patchright-chromium (builtin) fingerprint=false")
+        mode_desc = f"fingerprint={self.fingerprint_platform}/{self.fingerprint_brand}" if self.fingerprint_enabled else "fingerprint=false"
+        self.log_plain(f"[Browser] mode=patchright-chromium (builtin) {mode_desc}")
         self.runtime_stats = {
             'started_at': time.time(),
             'submitted': 0,

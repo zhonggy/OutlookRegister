@@ -968,7 +968,7 @@ async function checkConn(){
 async function renderSettings(main){
   let cfg={};
   try{cfg=await api('/api/config')}catch(e){}
-  const p=cfg.proxy||{},o=cfg.oauth2||{},t=cfg.temp_mail||{};
+  const p=cfg.proxy||{},o=cfg.oauth2||{},t=cfg.temp_mail||{},b=cfg.browser||{};
   main.innerHTML=`
     <div class="page-title">系统设置</div>
     <div class="page-desc">可视化编辑 config.json，保存后下次启动注册生效</div>
@@ -1007,6 +1007,23 @@ async function renderSettings(main){
         <div class="field"><label>Client ID</label><input id="cfClientId" value="${esc(o.client_id||'')}"></div>
         <div class="field"><label>Redirect URL</label><input id="cfRedirect" value="${esc(o.redirect_url||'http://localhost')}"></div>
         <div class="field"><label>Scopes（逗号分隔）</label><input id="cfScopes" value="${esc((o.Scopes||[]).join(', '))}"></div>
+      </div>
+      <div class="card">
+        <h3>浏览器</h3>
+        <label class="chk-row"><input id="cfFpEn" type="checkbox" ${b.fingerprint_enabled?'checked':''}><div><strong>启用浏览器指纹</strong><span class="hint" style="display:block">patchright 指纹伪装 Canvas/WebGL/UA 等，降低自动化识别</span></div></label>
+        <div class="field"><label>指纹平台</label><select id="cfFpPlatform">
+          <option value="windows" ${(b.fingerprint_platform||'windows')==='windows'?'selected':''}>Windows</option>
+          <option value="macos" ${b.fingerprint_platform==='macos'?'selected':''}>macOS</option>
+          <option value="linux" ${b.fingerprint_platform==='linux'?'selected':''}>Linux</option>
+          <option value="android" ${b.fingerprint_platform==='android'?'selected':''}>Android</option>
+          <option value="ios" ${b.fingerprint_platform==='ios'?'selected':''}>iOS</option>
+        </select></div>
+        <div class="field"><label>指纹品牌</label><select id="cfFpBrand">
+          <option value="Chrome" ${(b.fingerprint_brand||'Chrome')==='Chrome'?'selected':''}>Chrome</option>
+          <option value="Edge" ${b.fingerprint_brand==='Edge'?'selected':''}>Edge</option>
+          <option value="Firefox" ${b.fingerprint_brand==='Firefox'?'selected':''}>Firefox</option>
+          <option value="Safari" ${b.fingerprint_brand==='Safari'?'selected':''}>Safari</option>
+        </select></div>
       </div>
       <div class="card">
         <h3>临时邮箱</h3>
@@ -1064,6 +1081,11 @@ async function saveSettings(){
       enable_prefix:true,
       code_timeout:parseInt($('cfTmTimeout').value)||120,
       poll_interval:parseInt($('cfTmPoll').value)||3,
+    },
+    browser:{
+      fingerprint_enabled:$('cfFpEn').checked,
+      fingerprint_platform:$('cfFpPlatform').value,
+      fingerprint_brand:$('cfFpBrand').value,
     },
   };
   try{

@@ -21,7 +21,10 @@
     "enable_oauth2": true,
     "client_id": "9e5f94bc-e8a4-4e73-b8be-63364c29d753",
     "redirect_url": "http://localhost",
-    "Scopes": ["offline_access", "https://graph.microsoft.com/.default"]
+    "Scopes": [
+      "offline_access",
+      "https://graph.microsoft.com/.default"
+    ]
   },
   "temp_mail": {
     "enabled": false,
@@ -32,5 +35,10 @@
     "enable_prefix": false,
     "code_timeout": 120,
     "poll_interval": 3
+  },
+  "browser": {
+    "fingerprint_enabled": false,
+    "fingerprint_platform": "windows",
+    "fingerprint_brand": "Chrome"
   }
 }
