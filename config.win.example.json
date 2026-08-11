@@ -1,0 +1,43 @@
+{
+  "email_suffix": "@outlook.com",
+  "headless": true,
+  "bot_protection_wait": 15,
+  "max_captcha_retries": 3,
+  "captcha_strategy": 0,
+  "concurrent_flows": 5,
+  "tasks": 50,
+  "success_tasks": null,
+  "batch_success_limit": 300,
+  "proxy": {
+    "mode": "multiple",
+    "type": "http",
+    "host": "127.0.0.1",
+    "single_port": 0,
+    "port_start": 24000,
+    "port_end": 24099,
+    "max_per_proxy": 1
+  },
+  "oauth2": {
+    "enable_oauth2": true,
+    "client_id": "9e5f94bc-e8a4-4e73-b8be-63364c29d753",
+    "redirect_url": "http://localhost",
+    "Scopes": ["offline_access", "https://graph.microsoft.com/.default"]
+  },
+  "temp_mail": {
+    "enabled": true,
+    "type": "cloud_mail",
+    "base_url": "",
+    "admin_email": "",
+    "admin_password": "",
+    "domain": "",
+    "name_prefix": "orx",
+    "enable_prefix": true,
+    "code_timeout": 120,
+    "poll_interval": 3
+  },
+  "browser": {
+    "fingerprint_enabled": true,
+    "fingerprint_platform": "windows",
+    "fingerprint_brand": "Chrome"
+  }
+}
