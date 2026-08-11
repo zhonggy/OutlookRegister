@@ -1,12 +1,11 @@
 @echo off
-chcp 65001 >nul
 title Registrar Suite - Windows Installer
 echo ============================================
 echo   OutlookRegister + Easy Proxies - Windows
 echo ============================================
 echo.
 
-rem ---------- 0. 前置检查 ----------
+rem ---------- 0. prereq check ----------
 where python >nul 2>nul || (
     echo [ERROR] Python not found. Install Python 3.10+ from https://www.python.org/downloads/
     echo         IMPORTANT: tick "Add python.exe to PATH" during install.
@@ -16,7 +15,6 @@ where git >nul 2>nul || (
     echo [ERROR] Git not found. Install from https://git-scm.com/download/win
     pause & exit /b 1
 )
-where curl >nul 2>nul || echo [WARN] curl not found, downloads may fail
 
 rem ---------- 1. easy_proxies (proxy pool) ----------
 echo.
@@ -91,12 +89,12 @@ echo       pip install ...
 ".venv\Scripts\pip" install -q -r requirements.txt
 if not exist "config.json" (
     copy /y config.win.example.json config.json >nul
-    echo       !! EDIT config.json : temp_mail (admin_password etc.) if needed
+    echo       !! EDIT config.json : temp_mail settings if needed
 )
 echo       installing chromium (patchright) ...
 ".venv\Scripts\patchright" install chromium
 
-rem ---------- 3. 提示 ----------
+rem ---------- 3. done ----------
 echo.
 echo [3/3] Done.
 echo ============================================

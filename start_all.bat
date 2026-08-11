@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 title Registrar Suite - Start All
 echo ============================================
 echo   Starting proxy pool + web console ...

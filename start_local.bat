@@ -1,10 +1,9 @@
 @echo off
-chcp 65001 >nul
-title 本地注册机一键启动
+title Registrar Local Starter
 cd /d "%~dp0"
 where python >nul 2>nul
 if errorlevel 1 (
-    echo [错误] 未找到 python，请确认已安装并加入 PATH
+    echo [ERROR] python not found. Install Python 3.10+ and tick "Add to PATH".
     pause
     exit /b 1
 )
