@@ -1549,29 +1549,58 @@ class OutlookController:
             OutlookController._b2_success[mode] = OutlookController._b2_success.get(mode, 0) + 1
 
     def _execute_b2(self, page, frame2, x, y, bm):
-        """操作按钮2：定位 → 移动 → click或dblclick"""
+        """操作按钮2：定位 → 移动 → click或dblclick
+
+        用 locator.click(position=...) 而不是 page.mouse.click 裸坐标：
+        Playwright 会自动处理嵌套 iframe 坐标转换与命中检测，
+        避免 Linux 上 bounding_box 坐标落空（Windows 偶合命中）。
+        """
         page.wait_for_timeout(random.randint(300, 900))
         btn2_selectors = ['[aria-label="再次按下"]', '[aria-label*="再次"]', '[aria-label*="按下"]']
-        btn2_box = None
+        el = None
         for sel in btn2_selectors:
             try:
-                btn2_box = frame2.locator(sel).bounding_box()
-                if btn2_box: break
-            except Exception: continue
-        if not btn2_box:
+                loc = frame2.locator(sel)
+                if loc.count() > 0:
+                    el = loc.first
+                    break
+            except Exception:
+                continue
+        if el is None:
             return False
-        # 在按钮2上随机偏移点击位置
-        b2cx, b2cy = btn2_box['x']+btn2_box['width']/2, btn2_box['y']+btn2_box['height']/2
-        x2 = b2cx + random.uniform(-btn2_box['width']*0.35, btn2_box['width']*0.35)
-        y2 = b2cy + random.uniform(-btn2_box['height']*0.35, btn2_box['height']*0.35)
-        page.mouse.move(x2, y2, steps=random.randint(3, 10))
+        try:
+            el.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        box = el.bounding_box()
+        if not box:
+            return False
+        # 相对按钮中心随机偏移（保留人类化，位置交给 locator 转换）
+        off_x = random.uniform(-box['width'] * 0.35, box['width'] * 0.35)
+        off_y = random.uniform(-box['height'] * 0.35, box['height'] * 0.35)
+        cx, cy = box['width'] / 2 + off_x, box['height'] / 2 + off_y
+        # 鼠标先移过去（人类化轨迹），再元素级点击
+        bx, by = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+        try:
+            page.mouse.move(bx + off_x, by + off_y, steps=random.randint(3, 10))
+        except Exception:
+            pass
         page.wait_for_timeout(random.randint(50, 180))
         if bm == "dblclick":
-            page.mouse.click(x2, y2)
+            try:
+                el.click(position={'x': cx, 'y': cy}, timeout=5000)
+            except Exception:
+                return False
             page.wait_for_timeout(random.randint(80, 200))
-            page.mouse.click(x2 + random.uniform(-3, 3), y2 + random.uniform(-3, 3))
+            try:
+                el.click(position={'x': cx + random.uniform(-3, 3), 'y': cy + random.uniform(-3, 3)}, timeout=5000)
+            except Exception:
+                pass
         else:
-            page.mouse.click(x2, y2)
+            try:
+                el.click(position={'x': cx, 'y': cy}, timeout=5000)
+            except Exception:
+                return False
         return True
 
     def _check_captcha_result(self, page, frame1, frame2):
