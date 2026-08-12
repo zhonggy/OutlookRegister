@@ -1609,22 +1609,40 @@ class OutlookController:
         - (True, True): 需重试
         - (False, False): 失败/IP被封
         """
+        def _log_r(tag, msg):
+            try:
+                self._log(f"[CaptchaResult] {tag} | {msg}")
+            except Exception:
+                pass
         try:
             page.locator('.draw').wait_for(state="detached")  # 等待加载动画消失
+            _log_r('step1', '.draw 已消失')
             try:
                 page.locator('[role="status"][aria-label="正在加载..."]').wait_for(timeout=5000)
+                _log_r('step2', '检测到正在加载状态，等 8s')
                 page.wait_for_timeout(8000)
                 if page.get_by_text('一些异常活动').count() or page.get_by_text('此站点正在维护').count() > 0:
+                    _log_r('step2', '风控拦截: 一些异常活动/维护')
                     return False, False  # IP被风控
                 if frame2.locator('[aria-label="可访问性挑战"]').count() > 0:
+                    _log_r('step2', '验证码重置，需重试')
                     return True, True    # 验证码重置，需要重试
+                _log_r('step2', '无异常无重置 → 判定通过')
                 return True, False        # 验证码通过
             except Exception:
                 if page.get_by_text('取消').count() > 0:
+                    _log_r('step2-ex', '取消按钮出现 → 通过')
                     return True, False    # 取消按钮出现 → 通过
-                frame1.get_by_text("请再试一次").wait_for(timeout=15000)  # 提示重试
-                return True, True
+                try:
+                    frame1.get_by_text("请再试一次").wait_for(timeout=15000)  # 提示重试
+                    _log_r('step2-ex', '提示请再试一次 → 重试')
+                    return True, True
+                except Exception:
+                    _log_r('step2-ex', '无重试提示无取消 → 判定失败')
+                    return False, False
         except Exception:
             if page.get_by_text('取消').count() > 0:
+                _log_r('outer-ex', '取消按钮出现 → 通过')
                 return True, False
+            _log_r('outer-ex', '.draw 未消失/异常 → 失败')
             return False, False           # .draw未消失 → 失败
