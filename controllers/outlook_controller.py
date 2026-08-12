@@ -1265,6 +1265,17 @@ class OutlookController:
     # ============================================================
     # 全自动按压验证码
     # ============================================================
+    def _save_captcha_screenshot(self, page, tag):
+        """验证码调试：截图保存到 log/captcha/ 目录，用于对比不同环境下的验证码形态。"""
+        try:
+            d = os.path.join(self.log_dir, 'captcha')
+            os.makedirs(d, exist_ok=True)
+            fn = os.path.join(d, f"captcha_{tag}_{int(time.time())}.png")
+            page.screenshot(path=fn)
+            self._log(f"[Screenshot] saved {fn}")
+        except Exception as exc:
+            self._log(f"[Screenshot] fail: {exc}")
+
     def _captcha_hold(self, page):
         """全自动按压主循环：找目标 → 移动 → 按压 → 微颤 → 点按钮2 → 检查结果"""
         if not self._wait_for_captcha_frame(page):
@@ -1276,6 +1287,7 @@ class OutlookController:
         # 微软验证码是嵌套iframe结构
         frame1 = page.frame_locator('iframe[title="验证质询"]')
         frame2 = frame1.frame_locator('iframe[style*="display: block"]')
+        self._save_captcha_screenshot(page, 'iframe_ready')
         self._human_prelude(page)
         btn2_seen = False
 
@@ -1312,6 +1324,7 @@ class OutlookController:
                 page.mouse.up()
                 continue
             btn2_seen = True
+            self._save_captcha_screenshot(page, f'btn2_attempt{attempt}')
 
             # ⑥ click或dblclick轻量偏置轮换
             bm = self._pick_b2mode()
