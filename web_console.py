@@ -19,6 +19,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -300,15 +301,24 @@ def _start_register(tasks: int, concurrent: int) -> str:
         cfg["concurrent_flows"] = concurrent
         _save_config(cfg)
 
+        # 有头模式（headless=false）在 Linux 上需要 xvfb 虚拟显示器
+        # 本地 Windows 有桌面则直接跑
+        cmd = [sys.executable, "-u", "main.py"]
+        if not cfg.get("headless", True) and os.name != "nt":
+            if shutil.which("xvfb-run"):
+                cmd = ["xvfb-run", "-a", *cmd]
+            else:
+                return "有头模式需要 xvfb：请先安装 (sudo apt install -y xvfb)，或改回无头模式"
+
         os.makedirs(LOG_DIR, exist_ok=True)
         logf = open(RUN_LOG, "a", encoding="utf-8", buffering=1)
-        logf.write(f"\n===== [{time.strftime('%Y-%m-%d %H:%M:%S')}] 启动注册 tasks={tasks} concurrent={concurrent} =====\n")
+        logf.write(f"\n===== [{time.strftime('%Y-%m-%d %H:%M:%S')}] 启动注册 tasks={tasks} concurrent={concurrent} headless={cfg.get('headless', True)} =====\n")
         # 强制子进程以 UTF-8 输出（Windows 默认 GBK，会导致日志乱码）
         proc_env = dict(os.environ)
         proc_env["PYTHONIOENCODING"] = "utf-8"
         proc_env["PYTHONUTF8"] = "1"
         proc = subprocess.Popen(
-            [sys.executable, "-u", "main.py"],
+            cmd,
             cwd=BASE_DIR,
             stdout=logf,
             stderr=subprocess.STDOUT,
@@ -976,7 +986,7 @@ async function renderSettings(main){
       <div class="card">
         <h3>基础</h3>
         <div class="field"><label>邮箱后缀</label><input id="cfSuffix" value="${esc(cfg.email_suffix||'@outlook.com')}"></div>
-        <label class="chk-row"><input id="cfHeadless" type="checkbox" ${cfg.headless?'checked':''}><div><strong>无头模式</strong><div class="hint">VPS 上运行请勾选</div></div></label>
+        <label class="chk-row"><input id="cfHeadless" type="checkbox" ${cfg.headless?'checked':''}><div><strong>无头模式</strong><div class="hint">勾选=无头（推荐）；取消勾选=有头，Linux 上自动用 xvfb 虚拟显示（需已装 xvfb）</div></div></label>
         <div class="field"><label>机器人防护等待（秒）</label><input id="cfWait" type="number" value="${cfg.bot_protection_wait??15}"></div>
         <div class="field"><label>最大验证码重试</label><input id="cfCapRetry" type="number" value="${cfg.max_captcha_retries??3}"></div>
         <div class="field"><label>验证码策略</label><select id="cfCapStrategy">

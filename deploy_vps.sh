@@ -42,7 +42,7 @@ die()  { echo -e "\033[1;31m[x] $*\033[0m" >&2; exit 1; }
 log "安装系统依赖"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq git curl wget python3 python3-venv python3-pip >/dev/null
+apt-get install -y -qq git curl wget python3 python3-venv python3-pip xvfb >/dev/null
 
 # ---------- 1. easy_proxies（官方 release，v2.2.1） ----------
 # 注意：不用 fork 源码编译——fork main 分支的 sing-box DNS 有 bug
