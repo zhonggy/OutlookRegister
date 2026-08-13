@@ -1614,6 +1614,16 @@ class OutlookController:
                 self._log(f"[CaptchaResult] {tag} | {msg}")
             except Exception:
                 pass
+        def _passed_to_next_step(page):
+            """验证码通过后应进入辅助邮箱(#EmailAddress)或邮箱页，返回是否已进入。"""
+            try:
+                if page.locator('#EmailAddress').count() > 0:
+                    return True
+                if 'outlook.live.com/mail' in (page.url or ''):
+                    return True
+            except Exception:
+                pass
+            return False
         try:
             page.locator('.draw').wait_for(state="detached")  # 等待加载动画消失
             _log_r('step1', '.draw 已消失')
@@ -1625,6 +1635,10 @@ class OutlookController:
                     _log_r('step2', '风控拦截: 一些异常活动/维护')
                     return False, False  # IP被风控
                 if frame2.locator('[aria-label="可访问性挑战"]').count() > 0:
+                    # 挑战元素可能残留（通过后未销毁）：先确认是否已进入下一步
+                    if _passed_to_next_step(page):
+                        _log_r('step2', '挑战元素残留但已进入辅助邮箱/邮箱页 → 判定通过')
+                        return True, False
                     _log_r('step2', '验证码重置，需重试')
                     return True, True    # 验证码重置，需要重试
                 _log_r('step2', '无异常无重置 → 判定通过')
@@ -1633,6 +1647,9 @@ class OutlookController:
                 if page.get_by_text('取消').count() > 0:
                     _log_r('step2-ex', '取消按钮出现 → 通过')
                     return True, False    # 取消按钮出现 → 通过
+                if _passed_to_next_step(page):
+                    _log_r('step2-ex', '无提示但已进入辅助邮箱/邮箱页 → 判定通过')
+                    return True, False
                 try:
                     frame1.get_by_text("请再试一次").wait_for(timeout=15000)  # 提示重试
                     _log_r('step2-ex', '提示请再试一次 → 重试')
@@ -1643,6 +1660,9 @@ class OutlookController:
         except Exception:
             if page.get_by_text('取消').count() > 0:
                 _log_r('outer-ex', '取消按钮出现 → 通过')
+                return True, False
+            if _passed_to_next_step(page):
+                _log_r('outer-ex', '.draw 异常但已进入辅助邮箱/邮箱页 → 判定通过')
                 return True, False
             _log_r('outer-ex', '.draw 未消失/异常 → 失败')
             return False, False           # .draw未消失 → 失败
