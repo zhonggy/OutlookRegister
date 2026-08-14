@@ -1349,7 +1349,6 @@ class OutlookController:
         # 微软验证码是嵌套iframe结构
         frame1 = page.frame_locator('iframe[title="验证质询"]')
         frame2 = frame1.frame_locator('iframe[style*="display: block"]')
-        self._save_captcha_screenshot(page, 'iframe_ready')
         self._human_prelude(page)
         btn2_seen = False
 
@@ -1386,7 +1385,6 @@ class OutlookController:
                 page.mouse.up()
                 continue
             btn2_seen = True
-            self._save_captcha_screenshot(page, f'btn2_attempt{attempt}')
 
             # ⑥ click或dblclick轻量偏置轮换
             bm = self._pick_b2mode()
@@ -1409,6 +1407,11 @@ class OutlookController:
 
         with self._state_lock:
             OutlookController._attempts += 1
+        # 验证码最终失败：截一张现场图（便于排查验证码形态），成功不截图
+        try:
+            self._save_captcha_screenshot(page, 'final_fail')
+        except Exception:
+            pass
         if btn2_seen:
             self.bump_failure('captcha_btn2_appeared_but_failed')
         else:
