@@ -40,5 +40,6 @@
     "fingerprint_enabled": false,
     "fingerprint_platform": "windows",
     "fingerprint_brand": "Chrome"
-  }
+  },
+  "page_open_timeout": 30
 }

@@ -46,6 +46,11 @@ class OutlookController:
         """初始化：加载配置 → 创建线程存储 → 初始化统计 → 解析代理"""
         # config.json 已在 main.py 读取并解析，直接传入 dict
         self.wait_time = config_data['bot_protection_wait'] * 1000  # 秒→毫秒
+        # 注册页打开等待时间（秒）：goto + 等「同意并继续」按钮，默认 30s
+        try:
+            self.page_open_timeout = int(config_data.get('page_open_timeout', 30) or 30)
+        except Exception:
+            self.page_open_timeout = 30
         self.max_captcha_retries = config_data['max_captcha_retries']
         self.captcha_strategy = config_data.get('captcha_strategy', 0)
         self.enable_oauth2 = config_data["oauth2"]['enable_oauth2']
@@ -804,11 +809,11 @@ class OutlookController:
         day = str(random.randint(1, 25))
 
         try:
-            page.goto("https://outlook.live.com/mail/0/?prompt=create_account", timeout=30000, wait_until="domcontentloaded")
-            page.get_by_text('同意并继续').wait_for(timeout=30000)
+            page.goto("https://outlook.live.com/mail/0/?prompt=create_account", timeout=self.page_open_timeout * 1000, wait_until="domcontentloaded")
+            page.get_by_text('同意并继续').wait_for(timeout=self.page_open_timeout * 1000)
             start_time = time.time()
             page.wait_for_timeout(0.1 * self.wait_time)
-            page.get_by_text('同意并继续').click(timeout=30000)
+            page.get_by_text('同意并继续').click(timeout=10000)
         except Exception:
             self.bump_failure('ip_cant_open', 'register_page_open_fail')
             self._log("[Fail:IP] - IP质量不佳，无法打开Outlook注册页面，请换IP重试")

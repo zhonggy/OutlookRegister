@@ -988,6 +988,7 @@ async function renderSettings(main){
         <div class="field"><label>邮箱后缀</label><input id="cfSuffix" value="${esc(cfg.email_suffix||'@outlook.com')}"></div>
         <label class="chk-row"><input id="cfHeadless" type="checkbox" ${cfg.headless?'checked':''}><div><strong>无头模式</strong><div class="hint">勾选=无头（推荐）；取消勾选=有头，Linux 上自动用 xvfb 虚拟显示（需已装 xvfb）</div></div></label>
         <div class="field"><label>机器人防护等待（秒）</label><input id="cfWait" type="number" value="${cfg.bot_protection_wait??15}"></div>
+        <div class="field"><label>页面打开超时（秒）</label><input id="cfPageTimeout" type="number" value="${cfg.page_open_timeout??30}" placeholder="默认 30"></div>
         <div class="field"><label>最大验证码重试</label><input id="cfCapRetry" type="number" value="${cfg.max_captcha_retries??3}"></div>
         <div class="field"><label>验证码策略</label><select id="cfCapStrategy">
           <option value="0" ${cfg.captcha_strategy===0?'selected':''}>策略 0</option>
@@ -1062,6 +1063,7 @@ async function saveSettings(){
     email_suffix:$('cfSuffix').value.trim(),
     headless:$('cfHeadless').checked,
     bot_protection_wait:parseInt($('cfWait').value)||15,
+    page_open_timeout:parseInt($('cfPageTimeout').value)||30,
     max_captcha_retries:parseInt($('cfCapRetry').value)||3,
     captcha_strategy:parseInt($('cfCapStrategy').value)||0,
     batch_success_limit:parseInt($('cfBatch').value)||300,
