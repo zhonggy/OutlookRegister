@@ -978,7 +978,7 @@ async function checkConn(){
 async function renderSettings(main){
   let cfg={};
   try{cfg=await api('/api/config')}catch(e){}
-  const p=cfg.proxy||{},o=cfg.oauth2||{},t=cfg.temp_mail||{},b=cfg.browser||{};
+  const p=cfg.proxy||{},o=cfg.oauth2||{},t=cfg.temp_mail||{},b=cfg.browser||{},r=cfg.resin||{};
   main.innerHTML=`
     <div class="page-title">系统设置</div>
     <div class="page-desc">可视化编辑 config.json，保存后下次启动注册生效</div>
@@ -1035,6 +1035,12 @@ async function renderSettings(main){
           <option value="Firefox" ${b.fingerprint_brand==='Firefox'?'selected':''}>Firefox</option>
           <option value="Safari" ${b.fingerprint_brand==='Safari'?'selected':''}>Safari</option>
         </select></div>
+      </div>
+      <div class="card">
+        <h3>Resin 粘性代理池</h3>
+        <label class="chk-row"><input id="cfResinEn" type="checkbox" ${r.enabled?'checked':''}><div><strong>启用 Resin 代理</strong><span class="hint" style="display:block">开启后浏览器与 OAuth 全部走 Resin 粘性 IP（Account=邮箱前缀）</span></div></label>
+        <div class="field"><label>Resin URL（含 Token）</label><input id="cfResinUrl" value="${esc(r.url||'')}" placeholder="http://127.0.0.1:2260/my-token"></div>
+        <div class="field"><label>Platform</label><input id="cfResinPlatform" value="${esc(r.platform||'Default')}"></div>
       </div>
       <div class="card">
         <h3>临时邮箱</h3>
@@ -1098,6 +1104,11 @@ async function saveSettings(){
       fingerprint_enabled:$('cfFpEn').checked,
       fingerprint_platform:$('cfFpPlatform').value,
       fingerprint_brand:$('cfFpBrand').value,
+    },
+    resin:{
+      enabled:$('cfResinEn').checked,
+      url:$('cfResinUrl').value.trim(),
+      platform:$('cfResinPlatform').value.trim()||'Default',
     },
   };
   try{

@@ -3,6 +3,7 @@ import time
 import random
 import math
 import shutil
+import string
 import threading
 from faker import Faker
 from patchright.sync_api import sync_playwright
@@ -72,6 +73,23 @@ class OutlookController:
         # 注册后 / OAuth 中任一处弹出「保护帐户」页则绑定；未弹出则直接继续
         self.temp_mail_cfg = config_data.get('temp_mail', {}) or {}
         self.bind_recovery_email = bool(self.temp_mail_cfg.get('enabled', True))
+
+        # Resin 外部粘性代理池：resin.url 如 http://127.0.0.1:2260/my-token
+        resin_cfg = config_data.get('resin', {}) or {}
+        self.resin_enabled = bool(resin_cfg.get('enabled', False))
+        self.resin_server = ''
+        self.resin_token = ''
+        self.resin_platform = (resin_cfg.get('platform') or 'Default').strip() or 'Default'
+        if self.resin_enabled:
+            _url = (resin_cfg.get('url') or '').strip()
+            if _url:
+                try:
+                    from urllib.parse import urlparse
+                    _u = urlparse(_url)
+                    self.resin_server = f"{_u.scheme}://{_u.netloc}"
+                    self.resin_token = (_u.path or '').strip('/').rsplit('/', 1)[-1] if _u.path else ''
+                except Exception:
+                    pass
 
         self.thread_local = threading.local()
         self.cleanup_lock = threading.Lock()
@@ -166,7 +184,7 @@ class OutlookController:
                 self.failure_stats[name] = self.failure_stats.get(name, 0) + 1
 
     def _reset_thread_runtime(self):
-        for attr in ('_proxy', '_ip_info', '_log_prefix'):
+        for attr in ('_proxy', '_ip_info', '_log_prefix', '_resin_account'):
             if hasattr(self.thread_local, attr):
                 delattr(self.thread_local, attr)
 
@@ -421,10 +439,13 @@ class OutlookController:
         return {'type': proxy_type, 'host': host, 'ports': ports, 'max_per': pc.get('max_per_proxy', 20), 'direct': False}
 
     def _pick_proxy(self):
-        """选择代理端口：两步——①过滤（排除用满的+烂IP）②加权随机（胜率高的优先）
-
-        直连模式（host 为空）直接返回空串，不挂代理。
-        """
+        """选择代理：Resin 粘性代理优先；其次端口池/单端口；host 为空直连。"""
+        # Resin 正向代理：Account = 邮箱前缀（登录前标识），粘性 IP
+        if self.resin_enabled and self.resin_server:
+            account = self._resin_account()
+            proxy_url = self._resin_proxy_url(account)
+            self.thread_local._proxy = proxy_url
+            return proxy_url
         cfg = self._proxy_config
         if cfg.get('direct'):
             self.thread_local._proxy = ''
@@ -463,6 +484,35 @@ class OutlookController:
         proxy_url = f"{cfg['type']}://{cfg['host']}:{port}"
         self.thread_local._proxy = proxy_url
         return proxy_url
+
+    # ============================================================
+    # Resin 粘性代理池
+    # ============================================================
+    def set_task_account(self, email):
+        """记录任务账号标识（Resin Account）。推荐用账号登录前就有的标识：邮箱前缀。"""
+        if not email:
+            return
+        if '@' in email:
+            self.thread_local._resin_account = email.split('@')[0]
+        else:
+            self.thread_local._resin_account = email
+
+    def _resin_account(self):
+        """返回当前任务稳定的 Resin Account；无则生成临时标识（TempIdentity）。"""
+        acc = getattr(self.thread_local, '_resin_account', None)
+        if not acc:
+            acc = 'tmp' + ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+            self.thread_local._resin_account = acc
+        return acc
+
+    def _resin_proxy_url(self, account):
+        """构造 Resin 正向代理 URL（带认证），供 requests 类使用。
+
+        格式: http://Platform.Account:TOKEN@host:port
+        """
+        from urllib.parse import urlparse
+        u = urlparse(self.resin_server)
+        return f"{u.scheme}://{self.resin_platform}.{account}:{self.resin_token}@{u.netloc}"
 
     # ============================================================
     # 浏览器管理
@@ -587,7 +637,14 @@ class OutlookController:
                 'headless': self.headless,
                 'args': args,
             }
-            if proxy_url:
+            if self.resin_enabled and self.resin_server:
+                # Resin 正向代理：浏览器走粘性 IP（username = Platform.Account）
+                common['proxy'] = {
+                    'server': self.resin_server,
+                    'username': f"{self.resin_platform}.{self._resin_account()}",
+                    'password': self.resin_token,
+                }
+            elif proxy_url:
                 common['proxy'] = {"server": proxy_url, "bypass": "localhost"}
 
             exe = self.browser_executable_path

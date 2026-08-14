@@ -248,6 +248,10 @@ def process_single_flow(controller, task_num=0, total=0):
             pass
 
     try:
+        # 先生成邮箱（Resin 模式下前缀即 Account 标识，需在浏览器启动前确定）
+        email = random_email()
+        password = generate_strong_password()
+        controller.set_task_account(email)
         controller.set_task_prefix(task_num, total)
         page = controller.get_thread_page()
         if not page:
@@ -255,8 +259,6 @@ def process_single_flow(controller, task_num=0, total=0):
             _note(False)
             return False
         current_proxy = getattr(controller.thread_local, '_proxy', '')
-        email = random_email()
-        password = generate_strong_password()
         controller.log_event('REGISTER', 'INFO', 'account', f"Generate {email}{controller.email_suffix}")
 
         # 注册微软邮箱: True / False / 'handed_off'(策略2 仅到验证码后交由人工)
