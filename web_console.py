@@ -17,10 +17,12 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import re
 import secrets
 import shutil
 import socket
+import string
 import subprocess
 import sys
 import threading
@@ -239,6 +241,57 @@ def _register_status() -> dict:
         "percent": percent,
         "started_at": started,
         "running": proc is not None and proc.poll() is None,
+    }
+
+
+def _check_resin() -> dict:
+    """Resin 连通性测试：同 Account 连续两次请求 ipinfo，验证代理连通 + 出口 IP 粘性。"""
+    cfg = _load_config()
+    resin = cfg.get("resin") or {}
+    if not resin.get("enabled"):
+        return {"ok": False, "detail": "Resin 未启用（先勾选启用并保存）"}
+    url = (resin.get("url") or "").strip()
+    platform = (resin.get("platform") or "Default").strip() or "Default"
+    if not url:
+        return {"ok": False, "detail": "Resin URL 未配置"}
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(url)
+        if not u.scheme or not u.netloc:
+            return {"ok": False, "detail": f"Resin URL 格式错误: {url}"}
+        server = f"{u.scheme}://{u.netloc}"
+        token = (u.path or "").strip("/").rsplit("/", 1)[-1] if u.path else ""
+    except Exception as e:
+        return {"ok": False, "detail": f"Resin URL 解析失败: {e}"}
+    if not token:
+        return {"ok": False, "detail": "Resin URL 缺少 Token（格式: http://host:port/token）"}
+
+    account = "test" + "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    proxy = f"{u.scheme}://{platform}.{account}:{token}@{u.netloc}"
+    import requests
+    ips = []
+    parts = []
+    for i in range(2):
+        try:
+            r = requests.get("https://ipinfo.io/json",
+                             proxies={"http": proxy, "https": proxy},
+                             timeout=8, headers={"Accept": "application/json"})
+            if r.status_code != 200:
+                return {"ok": False, "detail": f"Resin 返回 HTTP {r.status_code}"}
+            d = r.json()
+            ip = d.get("ip", "?")
+            country = d.get("country", "")
+            ips.append(ip)
+            parts.append(f"{ip} ({country})")
+        except Exception as e:
+            return {"ok": False, "detail": f"第{i + 1}次请求失败: {e.__class__.__name__}: {e}"}
+    sticky = len(ips) == 2 and ips[0] == ips[1]
+    return {
+        "ok": True,
+        "sticky": sticky,
+        "account": account,
+        "ip": ips[0],
+        "detail": f"同 Account({account}) 两次出口: {parts[0]} → {parts[1]}；" + ("粘性 OK" if sticky else "IP 变化，粘性异常"),
     }
 
 
@@ -544,6 +597,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/register/check":
             return self._send_json(_check_connectivity())
+        if path == "/api/resin/check":
+            if not self._authed():
+                return self._send_json({"error": "未登录"}, 401)
+            return self._send_json(_check_resin())
 
         if path == "/api/logs/clear":
             if not self._authed():
@@ -975,6 +1032,14 @@ async function checkConn(){
 }
 
 /* ---------- 系统设置 ---------- */
+async function testResin(){
+  const st=$('resinStatus');
+  if(st){st.textContent='测试中...';st.className='status'}
+  try{
+    const r=await api('/api/resin/check',{method:'POST'});
+    if(st){st.textContent=(r.ok?'OK ':'FAIL ')+r.detail;st.className='status '+(r.ok?'ok':'err')}
+  }catch(e){if(st){st.textContent='测试失败: '+e.message;st.className='status err'}}
+}
 async function renderSettings(main){
   let cfg={};
   try{cfg=await api('/api/config')}catch(e){}
@@ -1041,6 +1106,7 @@ async function renderSettings(main){
         <label class="chk-row"><input id="cfResinEn" type="checkbox" ${r.enabled?'checked':''}><div><strong>启用 Resin 代理</strong><span class="hint" style="display:block">开启后浏览器与 OAuth 全部走 Resin 粘性 IP（Account=邮箱前缀）</span></div></label>
         <div class="field"><label>Resin URL（含 Token）</label><input id="cfResinUrl" value="${esc(r.url||'')}" placeholder="http://127.0.0.1:2260/my-token"></div>
         <div class="field"><label>Platform</label><input id="cfResinPlatform" value="${esc(r.platform||'Default')}"></div>
+        <div class="actions"><button class="btn ghost sm" onclick="testResin()">测试连接</button><span class="status" id="resinStatus" style="display:inline-flex;align-items:center"></span></div>
       </div>
       <div class="card">
         <h3>临时邮箱</h3>
