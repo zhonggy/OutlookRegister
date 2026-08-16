@@ -38,6 +38,7 @@ RECOVERY_FILE = os.path.join(RESULTS_DIR, "recovery_emails.txt")
 ADMIN_FILE = os.path.join(BASE_DIR, "admin.json")
 LOG_DIR = os.path.join(BASE_DIR, "log")
 RUN_LOG = os.path.join(LOG_DIR, "web_console_run.log")
+PUSH_STATE_FILE = os.path.join(BASE_DIR, ".push_state")
 
 HOST = "127.0.0.1"
 PORT = 9090
@@ -133,6 +134,82 @@ def _line_count(path: str) -> int:
             return sum(1 for _ in f)
     except Exception:
         return 0
+
+
+def _push_to_manager():
+    """将 oauth2.txt 中未推送的账号推送到 outlook-manager。"""
+    cfg = _load_config()
+    om = cfg.get("outlook_manager", {})
+    if not om.get("api_url") or not om.get("api_key"):
+        return {"ok": False, "detail": "请先在系统设置中配置 Outlook Manager 地址和 API Key"}
+
+    lines = _read_lines(OAUTH_FILE)
+    if not lines:
+        return {"ok": True, "created": 0, "updated": 0, "skipped": 0, "detail": "没有可推送的账号"}
+
+    last_pushed = 0
+    try:
+        with open(PUSH_STATE_FILE, "r") as f:
+            last_pushed = int(f.read().strip())
+    except Exception:
+        pass
+
+    if last_pushed >= len(lines):
+        return {"ok": True, "created": 0, "updated": 0, "skipped": 0, "detail": "没有新账号需要推送"}
+
+    new_accounts = []
+    for line in lines[last_pushed:]:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("----")
+        if len(parts) >= 4:
+            new_accounts.append({
+                "email": parts[0].strip(),
+                "password": parts[1].strip(),
+                "client_id": parts[2].strip(),
+                "refresh_token": parts[3].strip(),
+            })
+
+    if not new_accounts:
+        return {"ok": True, "created": 0, "updated": 0, "skipped": 0, "detail": "没有新账号需要推送"}
+
+    import requests
+    try:
+        resp = requests.post(
+            om["api_url"],
+            json=new_accounts,
+            headers={"X-API-Key": om["api_key"], "Content-Type": "application/json"},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+    except Exception as e:
+        return {"ok": False, "detail": f"推送失败: {e}"}
+
+    with open(PUSH_STATE_FILE, "w") as f:
+        f.write(str(len(lines)))
+
+    result["ok"] = True
+    result["pushed"] = len(new_accounts)
+    return result
+
+
+def _test_manager_connection():
+    """测试 outlook-manager 连通性。"""
+    cfg = _load_config()
+    om = cfg.get("outlook_manager", {})
+    if not om.get("api_url"):
+        return {"ok": False, "detail": "请先配置 Outlook Manager 地址"}
+    import requests
+    try:
+        base = om["api_url"].rsplit("/api/", 1)[0]
+        resp = requests.get(f"{base}/api/v1/healthz", timeout=10)
+        if resp.status_code == 200:
+            return {"ok": True, "detail": "连接成功"}
+        return {"ok": False, "detail": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)}
 
 
 def _load_config() -> dict:
@@ -602,6 +679,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "未登录"}, 401)
             return self._send_json(_check_resin())
 
+        if path == "/api/outlook-manager/push":
+            if not self._authed():
+                return self._send_json({"error": "未登录"}, 401)
+            return self._send_json(_push_to_manager())
+
+        if path == "/api/outlook-manager/test":
+            if not self._authed():
+                return self._send_json({"error": "未登录"}, 401)
+            return self._send_json(_test_manager_connection())
+
         if path == "/api/logs/clear":
             if not self._authed():
                 return self._send_json({"error": "未登录"}, 401)
@@ -1040,10 +1127,34 @@ async function testResin(){
     if(st){st.textContent=(r.ok?'OK ':'FAIL ')+r.detail;st.className='status '+(r.ok?'ok':'err')}
   }catch(e){if(st){st.textContent='测试失败: '+e.message;st.className='status err'}}
 }
+async function testOm(){
+  const st=$('omStatus');
+  if(st){st.textContent='测试中...';st.className='status'}
+  try{
+    const r=await api('/api/outlook-manager/test',{method:'POST'});
+    if(st){st.textContent=(r.ok?'OK ':'FAIL ')+r.detail;st.className='status '+(r.ok?'ok':'err')}
+  }catch(e){if(st){st.textContent='测试失败: '+e.message;st.className='status err'}}
+}
+async function pushOm(){
+  const st=$('omStatus');
+  if(st){st.textContent='推送中...';st.className='status'}
+  try{
+    const r=await api('/api/outlook-manager/push',{method:'POST'});
+    if(r.ok){
+      const parts=[];
+      if(r.created)parts.push('新建 '+r.created);
+      if(r.updated)parts.push('更新 '+r.updated);
+      if(r.skipped)parts.push('跳过 '+r.skipped);
+      if(st){st.textContent=parts.length?parts.join('，'):(r.detail||'无新账号');st.className='status ok'}
+    }else{
+      if(st){st.textContent=r.detail||'推送失败';st.className='status err'}
+    }
+  }catch(e){if(st){st.textContent='推送失败: '+e.message;st.className='status err'}}
+}
 async function renderSettings(main){
   let cfg={};
   try{cfg=await api('/api/config')}catch(e){}
-  const p=cfg.proxy||{},o=cfg.oauth2||{},t=cfg.temp_mail||{},b=cfg.browser||{},r=cfg.resin||{};
+  const p=cfg.proxy||{},o=cfg.oauth2||{},t=cfg.temp_mail||{},b=cfg.browser||{},r=cfg.resin||{},om=cfg.outlook_manager||{};
   main.innerHTML=`
     <div class="page-title">系统设置</div>
     <div class="page-desc">可视化编辑 config.json，保存后下次启动注册生效</div>
@@ -1123,6 +1234,18 @@ async function renderSettings(main){
         <div class="field"><label>验证码超时（秒）</label><input id="cfTmTimeout" type="number" value="${t.code_timeout??120}"></div>
         <div class="field"><label>轮询间隔（秒）</label><input id="cfTmPoll" type="number" value="${t.poll_interval??3}"></div>
       </div>
+      <div class="card">
+        <h3>Outlook Manager 对接</h3>
+        <label class="chk-row"><input id="cfOmEn" type="checkbox" ${om.enabled?'checked':''}><div><strong>启用自动推送</strong><span class="hint" style="display:block">注册完成后自动推送到 outlook-manager</span></div></label>
+        <div class="field"><label>API 地址</label><input id="cfOmUrl" value="${esc(om.api_url||'')}" placeholder="http://IP:18327/api/v1/ingest/accounts"></div>
+        <div class="field"><label>API Key</label><input id="cfOmKey" value="${esc(om.api_key||'')}" placeholder="omk_xxx"></div>
+        <div class="actions">
+          <button class="btn ghost sm" onclick="testOm()">测试连接</button>
+          <button class="btn ghost sm" onclick="pushOm()">手动推送</button>
+          <span class="status" id="omStatus" style="display:inline-flex;align-items:center"></span>
+        </div>
+        <div class="hint" style="margin-top:12px">在 outlook-manager 管理后台「系统设置 → API 密钥」创建密钥后填入上方。支持手动推送。</div>
+      </div>
     </div>
     <div class="actions" style="margin-top:18px">
       <button class="btn" onclick="saveSettings()">保存配置</button>
@@ -1175,6 +1298,11 @@ async function saveSettings(){
       enabled:$('cfResinEn').checked,
       url:$('cfResinUrl').value.trim(),
       platform:$('cfResinPlatform').value.trim()||'Default',
+    },
+    outlook_manager:{
+      enabled:$('cfOmEn').checked,
+      api_url:$('cfOmUrl').value.trim(),
+      api_key:$('cfOmKey').value.trim(),
     },
   };
   try{
