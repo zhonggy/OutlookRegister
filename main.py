@@ -4,6 +4,7 @@ import json
 import atexit
 import signal
 import threading
+import requests
 from controllers.oauth2 import (
     get_oauth2_token, CLIENT_ID, _extract_code_from_url,
     build_auth_url, _wait_for_auth_entry_state,
@@ -72,6 +73,35 @@ def append_oauth_result(email, password, refresh_token):
     with RESULT_WRITE_LOCK:
         with open(os.path.join(RESULTS_DIR, 'oauth2.txt'), 'a', encoding='utf-8') as f:
             f.write(f"{email}----{password}----{CLIENT_ID}----{refresh_token}\n")
+    # 自动推送到 outlook-manager（异步，失败不影响注册）
+    threading.Thread(target=_try_auto_push, args=(email, password, refresh_token), daemon=True).start()
+
+
+def _try_auto_push(email, password, refresh_token):
+    """如果启用了 outlook-manager 自动推送，推送单个账号（静默失败）。"""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            cfg = json.loads(f.read())
+    except Exception:
+        return
+    om = cfg.get('outlook_manager', {})
+    if not om.get('enabled') or not om.get('api_url') or not om.get('api_key'):
+        return
+    try:
+        requests.post(
+            om['api_url'],
+            json=[{
+                'email': email,
+                'password': password,
+                'client_id': CLIENT_ID,
+                'refresh_token': refresh_token,
+            }],
+            headers={'X-API-Key': om['api_key'], 'Content-Type': 'application/json'},
+            timeout=30,
+        )
+    except Exception:
+        pass
 
 
 def _login_and_get_token(page, email, password, prefix='', failure_hook=None, log_hook=None, current_proxy='', token_proxy_getter=None, temp_mail_cfg=None, recovery_already_bound=False, recovery_session=None):
