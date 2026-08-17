@@ -30,6 +30,12 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+try:
+    import requests
+except ImportError:
+    print("[FATAL] \u7f3a\u5c11 requests \u5e93\uff0c\u8bf7\u5148\u6267\u884c:  pip install requests", file=sys.stderr)
+    sys.exit(1)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 RESULTS_DIR = os.path.join(BASE_DIR, "Results")
@@ -174,7 +180,6 @@ def _push_to_manager():
     if not new_accounts:
         return {"ok": True, "created": 0, "updated": 0, "skipped": 0, "detail": "没有新账号需要推送"}
 
-    import requests
     try:
         resp = requests.post(
             om["api_url"],
@@ -201,7 +206,6 @@ def _test_manager_connection():
     om = cfg.get("outlook_manager", {})
     if not om.get("api_url"):
         return {"ok": False, "detail": "请先配置 Outlook Manager 地址"}
-    import requests
     try:
         base = om["api_url"].rsplit("/api/", 1)[0]
         resp = requests.get(f"{base}/api/v1/healthz", timeout=10)
@@ -345,7 +349,6 @@ def _check_resin() -> dict:
 
     account = "test" + "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
     proxy = f"{u.scheme}://{platform}.{account}:{token}@{u.netloc}"
-    import requests
     ips = []
     parts = []
     for i in range(2):
