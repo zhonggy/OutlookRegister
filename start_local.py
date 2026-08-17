@@ -68,6 +68,14 @@ def start_proxy_pool():
     return ok
 
 
+def _console_python():
+    """优先使用 venv 中的 python（含全部依赖），否则回退当前解释器。"""
+    venv_py = os.path.join(BASE, ".venv", "Scripts", "python.exe")
+    if os.path.exists(venv_py):
+        return venv_py
+    return sys.executable
+
+
 def start_console():
     if port_open(9090):
         print("[控制台] 已在运行 (9090)，跳过启动")
@@ -77,7 +85,7 @@ def start_console():
         return False
     print("[控制台] 启动 web_console.py ...")
     subprocess.Popen(
-        [sys.executable, CONSOLE, "--port", "9090"],
+        [_console_python(), CONSOLE, "--port", "9090"],
         cwd=BASE,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
