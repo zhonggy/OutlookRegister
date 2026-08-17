@@ -871,9 +871,9 @@ class OutlookController:
             start_time = time.time()
             page.wait_for_timeout(0.1 * self.wait_time)
             page.get_by_text('同意并继续').click(timeout=10000)
-        except Exception:
+        except Exception as e:
             self.bump_failure('ip_cant_open', 'register_page_open_fail')
-            self._log("[Fail:IP] - IP质量不佳，无法打开Outlook注册页面，请换IP重试")
+            self._log(f"[Fail:IP] - IP质量不佳，无法打开Outlook注册页面，请换IP重试 | {type(e).__name__}: {e}")
             return False
 
         try:
