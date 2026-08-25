@@ -5,6 +5,8 @@ import atexit
 import signal
 import threading
 import requests
+
+import paths
 from controllers.oauth2 import (
     get_oauth2_token, CLIENT_ID, _extract_code_from_url,
     build_auth_url, _wait_for_auth_entry_state,
@@ -16,10 +18,10 @@ from concurrent.futures import ThreadPoolExecutor
 from utils import random_email, generate_strong_password
 from controllers.outlook_controller import OutlookController
 
-RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Results')  # 输出目录（oauth2.txt在此）
+RESULTS_DIR = str(paths.RESULTS_DIR)  # 输出目录（oauth2.txt在此）
 RESULT_WRITE_LOCK = threading.Lock()
 # 默认 fingerprint 目录（与 OutlookController 默认一致）
-DEFAULT_BROWSER_PROFILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'browser_profiles')
+DEFAULT_BROWSER_PROFILES = str(paths.PROFILES_ROOT)
 # 供 atexit / signal 在任意退出路径清空 profiles
 # interrupt_requested: Ctrl+C 协作停止；summary 必须先于清理写出
 _RUNTIME = {
@@ -79,7 +81,7 @@ def append_oauth_result(email, password, refresh_token):
 
 def _try_auto_push(email, password, refresh_token):
     """如果启用了 outlook-manager 自动推送，推送单个账号（静默失败）。"""
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+    config_path = str(paths.CONFIG_PATH)
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             cfg = json.loads(f.read())
@@ -748,7 +750,13 @@ def run_concurrent_flows(
     return succeeded_tasks, failed_tasks
 
 
-if __name__ == "__main__":
+def run():
+    """注册主流程入口。
+
+    包装后由 app.py --worker 调用；源码模式下仍可 python main.py 直接运行。
+    逻辑与改造前一致，仅把原 __main__ 块改成函数体。
+    """
+    paths.ensure_dirs()
     atexit.register(_cleanup_browser_profiles_on_exit)
     # 信号只请求中断，不直接 SystemExit/清浏览器，保证能先写汇总
     for _sig in (getattr(signal, 'SIGINT', None), getattr(signal, 'SIGTERM', None), getattr(signal, 'SIGBREAK', None)):
@@ -759,7 +767,7 @@ if __name__ == "__main__":
         except Exception:
             pass
 
-    with open('config.json', 'r', encoding='utf-8') as f:
+    with open(paths.CONFIG_PATH, 'r', encoding='utf-8') as f:
         raw = f.read()
    
     lines = [line for line in raw.split('\n') if not line.strip().startswith('//')]
@@ -975,3 +983,7 @@ if __name__ == "__main__":
             _cleanup_browser_profiles_on_exit()
         except Exception:
             pass
+
+
+if __name__ == "__main__":
+    run()

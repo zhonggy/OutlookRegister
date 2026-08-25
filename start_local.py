@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Local Registrar One-Click Start器
+"""本地一键启动（源码模式开发用）。
 
-同时启动：
-  1. 代理池 easy_proxies（9091 管理端 + 24000+ 端口池）
-  2. 注册机 Web 控制台（9090）
+打包版请直接运行 OutlookRegister.exe —— 它会自己起控制台。
+本脚本保留用于源码调试，并支持可选拉起外部代理池。
 
-already-running services are skipped (idempotent).
+代理池路径不再硬编码，改为读 config.json:
+
+    "proxy_pool": {
+      "enabled": false,
+      "exe_path": "D:/out/easy_proxies/easy_proxies.exe",
+      "config_path": "D:/out/easy_proxies/config.yaml",
+      "manage_port": 9091
+    }
+
+enabled=false 或 exe_path 不存在则跳过，只起控制台。
 """
+import json
 import os
 import socket
 import subprocess
@@ -15,13 +24,16 @@ import sys
 import time
 import webbrowser
 
-BASE = os.path.dirname(os.path.abspath(__file__))          # OutlookRegister 目录
-EP_DIR = r"D:/out/easy_proxies"                            # 代理池目录
-EP_EXE = os.path.join(EP_DIR, "easy_proxies.exe")
-EP_CFG = os.path.join(EP_DIR, "config.yaml")
-CONSOLE = os.path.join(BASE, "web_console.py")
+import paths
 
-RUN_LOG = os.path.join(EP_DIR, "run.log")
+CONSOLE_PORT = 9090
+
+
+def load_cfg() -> dict:
+    try:
+        return json.loads(paths.CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def port_open(port, host="127.0.0.1", timeout=1.0):
@@ -45,69 +57,82 @@ def wait_port(port, secs, name):
     return False
 
 
-def start_proxy_pool():
-    if port_open(9091):
-        print("[代理池] [proxy-pool] already running (9091), skip")
-        return True
-    if not os.path.exists(EP_EXE):
-        print(f"[代理池] 未找到 {EP_EXE}，跳过（如需代理池请先准备 easy_proxies）")
+def start_proxy_pool(cfg: dict):
+    pp = cfg.get("proxy_pool") or {}
+    if not pp.get("enabled"):
+        print("[代理池] 未启用（config.json -> proxy_pool.enabled），跳过")
         return False
-    print("[代理池] 启动 easy_proxies ...")
-    logf = open(RUN_LOG, "a", encoding="utf-8", errors="replace")
+
+    exe = (pp.get("exe_path") or "").strip()
+    if not exe or not os.path.isfile(exe):
+        print(f"[代理池] 未找到可执行文件: {exe or '(未配置 exe_path)'}，跳过")
+        return False
+
+    port = int(pp.get("manage_port") or 9091)
+    if port_open(port):
+        print(f"[代理池] 已在运行 ({port})，跳过启动")
+        return True
+
+    ep_dir = os.path.dirname(exe)
+    cmd = [exe]
+    conf = (pp.get("config_path") or "").strip()
+    if conf and os.path.isfile(conf):
+        cmd += ["--config", conf]
+
+    print("[代理池] 启动中 ...")
+    run_log = paths.LOG_DIR / "proxy_pool.log"
+    paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logf = open(run_log, "a", encoding="utf-8", errors="replace")
     subprocess.Popen(
-        [EP_EXE, "--config", EP_CFG],
-        cwd=EP_DIR,
+        cmd,
+        cwd=ep_dir or None,
         stdout=logf,
         stderr=subprocess.STDOUT,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    ok = wait_port(9091, 30, "代理池")
+    ok = wait_port(port, 30, "代理池")
     if not ok:
-        print(f"  [代理池] 30s 内未就绪，请查看 {RUN_LOG}")
-    # 等端口池（节点测试需要更久，不阻塞，控制台里可看进度）
+        print(f"  [代理池] 30s 内未就绪，请查看 {run_log}")
     return ok
 
 
-def _console_python():
-    """优先使用 venv 中的 python（含全部依赖），否则回退当前解释器。"""
-    venv_py = os.path.join(BASE, ".venv", "Scripts", "python.exe")
-    if os.path.exists(venv_py):
-        return venv_py
-    return sys.executable
-
-
 def start_console():
-    if port_open(9090):
-        print("[控制台] 已在运行 (9090)，跳过启动")
+    if port_open(CONSOLE_PORT):
+        print(f"[控制台] 已在运行 ({CONSOLE_PORT})，跳过启动")
         return True
-    if not os.path.exists(CONSOLE):
-        print(f"[控制台] 未找到 {CONSOLE}")
+
+    app = paths.APP_DIR / "app.py"
+    if not app.is_file():
+        print(f"[控制台] 未找到 {app}")
         return False
-    print("[控制台] 启动 web_console.py ...")
+
+    venv_py = paths.APP_DIR / ".venv" / "Scripts" / "python.exe"
+    py = str(venv_py) if venv_py.exists() else sys.executable
+
+    print("[控制台] 启动 app.py ...")
     subprocess.Popen(
-        [_console_python(), CONSOLE, "--port", "9090"],
-        cwd=BASE,
+        [py, str(app), "--console", "--port", str(CONSOLE_PORT)],
+        cwd=str(paths.APP_DIR),
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    ok = wait_port(9090, 15, "控制台")
+    ok = wait_port(CONSOLE_PORT, 15, "控制台")
     if not ok:
         print("  [控制台] 15s 内未就绪，请检查是否有报错")
     return ok
 
 
 def main():
-    print("=" * 40)
-    print("  Local Registrar One-Click Start")
-    print("=" * 40)
-    start_proxy_pool()
+    print("=" * 44)
+    print("  OutlookRegister 本地一键启动（源码模式）")
+    print("=" * 44)
+    cfg = load_cfg()
+    start_proxy_pool(cfg)
     start_console()
     print()
-    print("Console : http://127.0.0.1:9090")
-    print("ProxyPool: http://127.0.0.1:9091")
-    print("（提示：节点池测速需要几分钟，可在 9091 或控制台连通检查里查看）")
+    print(f"控制台: http://127.0.0.1:{CONSOLE_PORT}")
     print()
     try:
-        webbrowser.open("http://127.0.0.1:9090")
+        webbrowser.open(f"http://127.0.0.1:{CONSOLE_PORT}")
     except Exception:
         pass
     input("按回车退出本窗口（服务仍在后台运行）...")

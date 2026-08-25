@@ -5,6 +5,11 @@ import math
 import shutil
 import string
 import threading
+
+import paths
+# 内置 Chromium 必须在导入 patchright 之前声明（打包版有 browsers/ 目录时生效）
+paths.setup_browsers_env()
+
 from faker import Faker
 from patchright.sync_api import sync_playwright
 
@@ -65,10 +70,7 @@ class OutlookController:
         self.fingerprint_platform = (browser_cfg.get('fingerprint_platform') or 'windows').strip() or 'windows'
         self.fingerprint_brand = (browser_cfg.get('fingerprint_brand') or 'Chrome').strip() or 'Chrome'
         user_data_root = (browser_cfg.get('user_data_root') or '').strip()
-        self.browser_user_data_root = user_data_root or os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'browser_profiles',
-        )
+        self.browser_user_data_root = user_data_root or str(paths.PROFILES_ROOT)
         # 备用邮箱绑定（CF Temp Mail）：概率出现，非固定步骤
         # 注册后 / OAuth 中任一处弹出「保护帐户」页则绑定；未弹出则直接继续
         self.temp_mail_cfg = config_data.get('temp_mail', {}) or {}
@@ -98,7 +100,7 @@ class OutlookController:
         self.log_lock = threading.Lock()
         self.active_resources = []
         self.active_playwrights = []
-        self.log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'log')
+        self.log_dir = str(paths.LOG_DIR)
         os.makedirs(self.log_dir, exist_ok=True)
         if self.fingerprint_enabled or self.browser_executable_path:
             os.makedirs(self.browser_user_data_root, exist_ok=True)
@@ -637,6 +639,11 @@ class OutlookController:
                 'headless': self.headless,
                 'args': args,
             }
+            # 打包版只内置完整 Chromium，不带独立的 chromium_headless_shell（可省 ~197MB）。
+            # Playwright ≥1.49 在 headless=True 时默认去找 headless shell，缺失会报错；
+            # channel='chromium' 强制用完整 Chromium 跑无头，且保留 --fingerprint 支持。
+            if self.headless and not paths.headless_shell_available():
+                common['channel'] = 'chromium'
             if self.resin_enabled and self.resin_server:
                 # Resin 正向代理：浏览器走粘性 IP（username = Platform.Account）
                 common['proxy'] = {

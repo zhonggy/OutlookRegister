@@ -36,15 +36,19 @@ except ImportError:
     print("[FATAL] \u7f3a\u5c11 requests \u5e93\uff0c\u8bf7\u5148\u6267\u884c:  pip install requests", file=sys.stderr)
     sys.exit(1)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-RESULTS_DIR = os.path.join(BASE_DIR, "Results")
-OAUTH_FILE = os.path.join(RESULTS_DIR, "oauth2.txt")
-RECOVERY_FILE = os.path.join(RESULTS_DIR, "recovery_emails.txt")
-ADMIN_FILE = os.path.join(BASE_DIR, "admin.json")
-LOG_DIR = os.path.join(BASE_DIR, "log")
-RUN_LOG = os.path.join(LOG_DIR, "web_console_run.log")
-PUSH_STATE_FILE = os.path.join(BASE_DIR, ".push_state")
+import paths
+import version as appver
+import updater
+
+BASE_DIR = str(paths.APP_DIR)
+CONFIG_PATH = str(paths.CONFIG_PATH)
+RESULTS_DIR = str(paths.RESULTS_DIR)
+OAUTH_FILE = str(paths.OAUTH_FILE)
+RECOVERY_FILE = str(paths.RECOVERY_FILE)
+ADMIN_FILE = str(paths.ADMIN_FILE)
+LOG_DIR = str(paths.LOG_DIR)
+RUN_LOG = str(paths.RUN_LOG)
+PUSH_STATE_FILE = str(paths.PUSH_STATE_FILE)
 
 HOST = "127.0.0.1"
 PORT = 9090
@@ -436,7 +440,11 @@ def _start_register(tasks: int, concurrent: int) -> str:
 
         # 有头模式（headless=false）在 Linux 上需要 xvfb 虚拟显示器
         # 本地 Windows 有桌面则直接跑
-        cmd = [sys.executable, "-u", "main.py"]
+        if getattr(sys, "frozen", False):
+            # 打包后 sys.executable 就是 OutlookRegister.exe，用 --worker 子模式重入自身
+            cmd = [sys.executable, "--worker"]
+        else:
+            cmd = [sys.executable, "-u", os.path.join(BASE_DIR, "app.py"), "--worker"]
         if not cfg.get("headless", True) and os.name != "nt":
             if shutil.which("xvfb-run"):
                 cmd = ["xvfb-run", "-a", *cmd]
@@ -450,12 +458,18 @@ def _start_register(tasks: int, concurrent: int) -> str:
         proc_env = dict(os.environ)
         proc_env["PYTHONIOENCODING"] = "utf-8"
         proc_env["PYTHONUTF8"] = "1"
+        popen_kwargs = {}
+        if os.name == "nt":
+            # 独立进程组：停止时才能用 CTRL_BREAK_EVENT 触发 main.py 的 SIGBREAK
+            # 处理器（先写汇总再清 profile）。否则 terminate() 是硬杀，清理逻辑不执行。
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         proc = subprocess.Popen(
             cmd,
             cwd=BASE_DIR,
             stdout=logf,
             stderr=subprocess.STDOUT,
             env=proc_env,
+            **popen_kwargs,
         )
         _runtime["proc"] = proc
         _runtime["task_total"] = tasks
@@ -468,26 +482,57 @@ def _start_register(tasks: int, concurrent: int) -> str:
     return "ok"
 
 
+def _signal_graceful_stop(proc) -> str:
+    """请求子进程优雅退出。
+
+    Windows: proc.terminate() 等价 TerminateProcess，是硬杀，main.py 注册的
+    SIGTERM/SIGBREAK 处理器不会执行 —— 「先写汇总再清 profile」的逻辑会被跳过。
+    因此改用 CTRL_BREAK_EVENT（需要子进程以 CREATE_NEW_PROCESS_GROUP 启动）。
+    """
+    if os.name == "nt":
+        try:
+            import signal as _signal
+            os.kill(proc.pid, _signal.CTRL_BREAK_EVENT)
+            return "ctrl_break"
+        except Exception:
+            pass
+    try:
+        proc.terminate()
+        return "terminate"
+    except Exception:
+        return "failed"
+
+
 def _stop_register() -> str:
     with _runtime["proc_lock"]:
         proc = _runtime["proc"]
         if proc is None or proc.poll() is not None:
             return "当前没有运行中的注册任务"
         _runtime["stopping"] = True
+        _signal_graceful_stop(proc)
+    # 等待优雅退出（main.py 会先写汇总再清浏览器），最多 30s 后强杀
+    deadline = time.time() + 30
+    while time.time() < deadline and proc.poll() is None:
+        time.sleep(0.5)
+    if proc.poll() is None:
         try:
             proc.terminate()
         except Exception:
             pass
-    # 等待优雅退出（main.py 有 SIGTERM 处理），最多 15s 后强杀
-    deadline = time.time() + 15
-    while time.time() < deadline and proc.poll() is None:
-        time.sleep(0.5)
+        deadline2 = time.time() + 5
+        while time.time() < deadline2 and proc.poll() is None:
+            time.sleep(0.3)
     if proc.poll() is None:
         try:
             proc.kill()
         except Exception:
             pass
     return "ok"
+
+
+def _register_running() -> bool:
+    proc = _runtime.get("proc")
+    return proc is not None and proc.poll() is None
 
 
 # ---------------------------------------------------------------- http
@@ -616,7 +661,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/logs/clear":
             if not self._authed():
                 return self._send_json({"error": "未登录"}, 401)
-            return self._send_json(self._clear_log_and_stats())
+            return self._send_json(_clear_log_and_stats())
+        if path == "/api/version":
+            return self._send_json({
+                "version": appver.VERSION,
+                "display": appver.DISPLAY_NAME,
+                "frozen": bool(getattr(sys, "frozen", False)),
+                "app_dir": str(paths.APP_DIR),
+                "release_page": appver.RELEASE_PAGE,
+            })
+        if path == "/api/update/status":
+            if not self._authed():
+                return self._send_json({"error": "未登录"}, 401)
+            return self._send_json(updater.snapshot())
         return self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -696,6 +753,21 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed():
                 return self._send_json({"error": "未登录"}, 401)
             return self._send_json(_clear_log_and_stats())
+
+        if path == "/api/update/check":
+            threading.Thread(target=updater.check, daemon=True).start()
+            return self._send_json({"message": "正在检查更新…"})
+
+        if path == "/api/update/download":
+            threading.Thread(target=updater.download_and_stage, daemon=True).start()
+            return self._send_json({"message": "已开始下载"})
+
+        if path == "/api/update/apply":
+            # 注册子进程会占着 _internal/*.dll，robocopy 覆盖会失败
+            if _register_running():
+                return self._send_json(
+                    {"error": "注册任务正在运行，请先点「停止」再更新"}, 400)
+            return self._send_json(updater.apply_and_restart())
 
         return self._send_json({"error": "not found"}, 404)
 
@@ -842,6 +914,10 @@ tr:last-child td{border-bottom:none}
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         系统设置
       </div>
+      <div class="item" data-page="about" onclick="go('about')">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        关于与更新
+      </div>
     </nav>
     <div class="foot">
       <span class="user" id="curUser"></span>
@@ -930,6 +1006,7 @@ async function renderPage(){
   if(PAGE==='dashboard')return renderDashboard(main);
   if(PAGE==='register')return renderRegister(main);
   if(PAGE==='settings')return renderSettings(main);
+  if(PAGE==='about')return renderAbout(main);
 }
 async function renderDashboard(main){
   let d={success:0,total:0,recent:[],failed:0,skipped:0};
@@ -1314,6 +1391,70 @@ async function saveSettings(){
   }catch(e){setStatus($('cfgStatus'),e.message,'err')}
 }
 
+/* ---------- 关于与更新 ---------- */
+let upTimer=null;
+async function renderAbout(main){
+  let v={version:'?',display:'',frozen:false,app_dir:'',release_page:'#'};
+  try{v=await api('/api/version')}catch(e){}
+  main.innerHTML=`
+    <div class="page-title">关于与更新</div>
+    <div class="card">
+      <div class="card-h">版本信息</div>
+      <div class="grid2">
+        <div><label>当前版本</label><input value="v${v.version}" readonly></div>
+        <div><label>运行模式</label><input value="${v.frozen?'打包版 (exe)':'源码模式'}" readonly></div>
+      </div>
+      <div style="margin-top:12px"><label>数据目录</label><input value="${v.app_dir}" readonly></div>
+      <div class="hint" style="margin-top:10px">config.json / Results / log 均保存在上述目录，更新时不会被覆盖。</div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-h">手动更新</div>
+      <div class="actions">
+        <button class="btn" id="upCheck" onclick="upDoCheck()">检查更新</button>
+        <button class="btn ghost" id="upDl" onclick="upDoDownload()" disabled>下载更新</button>
+        <button class="btn ghost" id="upApply" onclick="upDoApply()" disabled>立即重启并更新</button>
+        <a class="btn ghost" href="${v.release_page}" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block">打开发布页</a>
+      </div>
+      <div id="upBox" style="margin-top:14px">
+        <span class="dim">点「检查更新」从 GitHub 查询最新版本。不会自动更新。</span>
+      </div>
+      <div class="hint" style="margin-top:12px">更新前请先停止正在运行的注册任务。若 GitHub 无法访问，会自动尝试用注册代理。</div>
+    </div>`;
+  upPoll();
+  if(upTimer)clearInterval(upTimer);
+  upTimer=setInterval(()=>{if(PAGE==='about')upPoll();else{clearInterval(upTimer);upTimer=null}},1500);
+}
+async function upDoCheck(){try{await api('/api/update/check',{method:'POST'})}catch(e){}upPoll()}
+async function upDoDownload(){try{await api('/api/update/download',{method:'POST'})}catch(e){}upPoll()}
+async function upDoApply(){
+  if(!confirm('将关闭程序并安装更新，完成后自动重启。继续？'))return;
+  try{const r=await api('/api/update/apply',{method:'POST'});
+    $('upBox').innerHTML='<span class="ok">'+(r.message||'更新已开始，程序即将退出…')+'</span>';
+  }catch(e){$('upBox').innerHTML='<span class="err">'+e.message+'</span>'}
+}
+async function upPoll(){
+  const box=$('upBox');if(!box)return;
+  let s;try{s=await api('/api/update/status')}catch(e){return}
+  const dl=$('upDl'),ap=$('upApply');
+  if(dl)dl.disabled=(s.phase!=='available');
+  if(ap)ap.disabled=(s.phase!=='ready');
+  let cls='dim';
+  if(s.phase==='error')cls='err';
+  else if(s.phase==='uptodate'||s.phase==='ready')cls='ok';
+  let html='<span class="'+cls+'">'+esc(s.message||s.phase)+'</span>';
+  if(s.phase==='downloading'){
+    const mb=(s.downloaded/1048576).toFixed(1),tot=(s.size/1048576).toFixed(1);
+    html+='<div style="margin-top:8px">'+mb+' / '+tot+' MB ('+s.percent+'%)</div>';
+  }
+  if(s.remote&&s.notes&&(s.phase==='available'||s.phase==='ready')){
+    html+='<div style="margin-top:12px"><label>更新说明 ('+esc(s.remote)+')</label>'
+        +'<pre style="white-space:pre-wrap;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px;max-height:220px;overflow:auto;font-size:12px">'
+        +esc(s.notes)+'</pre></div>';
+  }
+  box.innerHTML=html;
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
 /* ---------- 启动 ---------- */
 (async function boot(){
   if(localStorage.getItem('or_token'))TOKEN=localStorage.getItem('or_token');
@@ -1335,15 +1476,30 @@ def main():
     args = ap.parse_args()
     HOST, PORT = args.host, args.port
 
-    os.makedirs(LOG_DIR, exist_ok=True)
-    srv = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"OutlookRegister Web Console: http://{HOST}:{PORT}")
+    print(f"OutlookRegister Web Console v{appver.VERSION}: http://{HOST}:{PORT}")
     print(f"配置文件: {CONFIG_PATH}")
     print("首次访问请在网页上创建管理员账号和密码。Ctrl+C 退出。")
+    main_serve(HOST, PORT)
+
+
+def main_serve(host: str, port: int):
+    """启动 HTTP 服务（供 app.py 直接调用，跳过命令行解析）。
+
+    只绑 127.0.0.1：现有鉴权是 HTTP 明文，暴露到公网会泄露凭据与 session token。
+    """
+    global HOST, PORT
+    HOST, PORT = host, port
+    os.makedirs(LOG_DIR, exist_ok=True)
+    srv = ThreadingHTTPServer((host, port), Handler)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\n已退出")
+    finally:
+        try:
+            srv.server_close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

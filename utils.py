@@ -4,8 +4,11 @@ import string
 import secrets
 import threading
 
-# 姓名库文件（与 utils.py 同目录）：每行一个姓名，如 EdwardRiley
-_NAMES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'english_name_generator.txt')
+import paths
+
+# 姓名库文件：每行一个姓名，如 EdwardRiley
+# 只读资源 —— 冻结后在 _internal/app_data/，开发时在项目根
+_NAMES_FILE = str(paths.NAMES_FILE)
 _names_cache = None
 _names_lock = threading.Lock()
 

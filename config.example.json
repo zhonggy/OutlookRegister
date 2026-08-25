@@ -8,6 +8,7 @@
   "tasks": 1,
   "success_tasks": null,
   "batch_success_limit": 300,
+  "page_open_timeout": 45,
   "proxy": {
     "mode": "single",
     "type": "http",
@@ -28,7 +29,9 @@
   },
   "temp_mail": {
     "enabled": false,
+    "type": "cloud_mail",
     "base_url": "",
+    "admin_email": "",
     "admin_password": "",
     "domain": "",
     "name_prefix": "",
@@ -37,14 +40,31 @@
     "poll_interval": 3
   },
   "browser": {
-    "fingerprint_enabled": false,
+    "fingerprint_enabled": true,
     "fingerprint_platform": "windows",
-    "fingerprint_brand": "Chrome"
+    "fingerprint_brand": "Chrome",
+    "executable_path": "",
+    "user_data_root": ""
   },
-  "page_open_timeout": 30,
   "resin": {
     "enabled": false,
-    "url": "http://127.0.0.1:2260/my-token",
+    "url": "",
     "platform": "Default"
+  },
+  "outlook_manager": {
+    "enabled": false,
+    "api_url": "",
+    "api_key": ""
+  },
+  "proxy_pool": {
+    "enabled": false,
+    "exe_path": "",
+    "config_path": "",
+    "manage_port": 9091
+  },
+  "update": {
+    "use_register_proxy": true,
+    "proxy": "",
+    "github_token": ""
   }
 }

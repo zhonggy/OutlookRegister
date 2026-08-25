@@ -1,0 +1,132 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [bate]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      include_headless_shell:
+        description: '内置 chromium_headless_shell (+197MB)'
+        type: boolean
+        default: false
+      make_release:
+        description: '构建后创建 GitHub Release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          # 只装实际用到的：项目从未 import playwright，装了白占 ~97MB
+          pip install -r requirements-build.txt
+          pip list
+
+      - name: Install Chromium for patchright
+        shell: pwsh
+        run: |
+          patchright install chromium
+          $root = Join-Path $env:LOCALAPPDATA 'ms-playwright'
+          Write-Host "== $root =="
+          Get-ChildItem $root | Select-Object Name, @{n='MB';e={
+            [math]::Round((Get-ChildItem $_.FullName -Recurse -File |
+              Measure-Object -Property Length -Sum).Sum / 1MB, 1)}} | Format-Table
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = python -c "import version; print(version.VERSION)"
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version v$v"
+
+      - name: Verify tag matches version.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $ver = "${{ steps.ver.outputs.version }}"
+          if ($tag -ne $ver) {
+            Write-Error "Tag v$tag 与 version.py 的 $ver 不一致，请先更新 version.py"
+            exit 1
+          }
+          Write-Host "Tag 与 version.py 一致: v$ver"
+
+      - name: Syntax check
+        shell: pwsh
+        run: |
+          python -m compileall -q app.py main.py web_console.py updater.py paths.py version.py utils.py start_local.py build.py release_notes.py controllers
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Build
+        shell: pwsh
+        env:
+          INCLUDE_HEADLESS_SHELL: ${{ inputs.include_headless_shell && '1' || '0' }}
+        run: |
+          if ("${{ inputs.include_headless_shell }}" -eq "true") {
+            python build.py --include-headless-shell
+          } else {
+            python build.py
+          }
+
+      - name: Show artifacts
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts | Select-Object Name, @{n='MB';e={
+            [math]::Round($_.Length / 1MB, 1)}} | Format-Table
+          Get-Content artifacts/SHA256SUMS.txt
+
+      - name: Upload full package
+        uses: actions/upload-artifact@v4
+        with:
+          name: OutlookRegister-v${{ steps.ver.outputs.version }}-full
+          path: artifacts/OutlookRegister-v*-full.zip
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload patch package
+        uses: actions/upload-artifact@v4
+        with:
+          name: OutlookRegister-v${{ steps.ver.outputs.version }}-patch
+          path: |
+            artifacts/OutlookRegister-v*-patch.zip
+            artifacts/SHA256SUMS.txt
+          retention-days: 30
+          compression-level: 0
+
+      - name: Compose release notes
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.make_release
+        shell: pwsh
+        run: python release_notes.py
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.make_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
+          name: OutlookRegister v${{ steps.ver.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/OutlookRegister-v*-full.zip
+            artifacts/OutlookRegister-v*-patch.zip
+            artifacts/SHA256SUMS.txt

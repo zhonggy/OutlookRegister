@@ -16,9 +16,10 @@ import os
 import threading
 import time
 
+import paths
 from controllers.temp_mail import client_from_config
 
-RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Results')
+RESULTS_DIR = str(paths.RESULTS_DIR)
 _RECOVERY_RECORD_LOCK = threading.Lock()
 
 

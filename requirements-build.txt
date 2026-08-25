@@ -1,0 +1,7 @@
+# 构建依赖（CI 用）。版本锁定，保证构建可复现。
+# 注意：这里刻意不含 playwright —— 项目只 import patchright，
+#       装了 playwright 会让打包体积白涨 ~97MB。
+faker==40.36.0
+requests==2.32.3
+patchright==1.52.5
+pyinstaller==6.11.1
