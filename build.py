@@ -18,6 +18,13 @@ import sys
 import zipfile
 from pathlib import Path
 
+# Windows runner 的控制台代码页不是 UTF-8，print 中文会 UnicodeEncodeError 直接挂掉构建。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
@@ -112,7 +119,9 @@ def clean():
 def pyinstaller(include_headless_shell: bool):
     env = dict(os.environ)
     env["INCLUDE_HEADLESS_SHELL"] = "1" if include_headless_shell else "0"
-    run([sys.executable, "-m", "PyInstaller", "--noconfirm",
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--log-level=INFO",
          "OutlookRegister.spec"], env=env)
 
 

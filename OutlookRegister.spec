@@ -16,6 +16,14 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+# Windows runner 控制台默认不是 UTF-8，spec 里 print 中文会直接抛
+# UnicodeEncodeError 并让构建失败。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = Path(os.path.abspath(SPECPATH))
 
 # ---------------------------------------------------------------- browsers
@@ -107,11 +115,12 @@ hiddenimports += collect_submodules("patchright")
 
 excludes = [
     "playwright",          # 项目只用 patchright，从未 import playwright
-    "tkinter", "unittest", "pydoc", "doctest", "pdb",
-    "setuptools", "pip", "wheel",
+    "tkinter", "unittest", "doctest", "pdb",
     "PIL", "numpy", "pandas", "matplotlib",
     "IPython", "pytest",
 ]
+# 不排除 setuptools / pkg_resources：faker 等包可能在运行时间接依赖它们，
+# 排掉省不了多少体积，却容易出 ModuleNotFoundError。
 
 block_cipher = None
 
@@ -125,13 +134,14 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=excludes,
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
+    optimize=0,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+# PyInstaller 6.x: PYZ 不再接 cipher / zipped_data（cipher 会直接报
+# RemovedCipherFeatureError）。Analysis 的 win_no_prefer_redirects /
+# win_private_assemblies 也已废弃，一并去掉。
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
@@ -156,7 +166,6 @@ exe = EXE(
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
     upx=False,

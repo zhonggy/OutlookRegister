@@ -22,6 +22,10 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 60
+    env:
+      # Windows runner 控制台默认不是 UTF-8；print 中文会 UnicodeEncodeError 并让构建失败
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
 
     steps:
       - name: Checkout
@@ -86,6 +90,7 @@ jobs:
           } else {
             python build.py
           }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Show artifacts
         shell: pwsh
