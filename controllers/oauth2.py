@@ -216,10 +216,10 @@ def _is_account_type_page(page):
 
 
 def _is_protect_account_page(page):
-    """「让我们来保护你的帐户」备用邮箱页。"""
+    """「让我们来保护你的帐户」备用邮箱页（含其验证码子页）。"""
     try:
-        from controllers.recovery_bind import is_protect_account_page, is_ott_code_page
-        return is_protect_account_page(page) or is_ott_code_page(page)
+        from controllers.recovery_bind import is_protect_account_page, is_any_code_page
+        return is_protect_account_page(page) or is_any_code_page(page)
     except Exception:
         if _locator_visible(page.locator("#EmailAddress")):
             return True
@@ -331,13 +331,21 @@ def _handle_protect_account(page, log, temp_mail_cfg=None, failure_hook=None, al
     """
     if already_bound:
         log('protect_account', '注册阶段已绑定过，OAuth 侧优先离开此页', 'INFO')
+        left = False
         try:
             if _locator_visible(page.locator('#iShowSkip')):
                 page.locator('#iShowSkip').first.click(timeout=4000)
                 page.wait_for_timeout(800)
+                left = True
         except Exception:
             pass
-        return _current_auth_entry_state(page)
+        st = _current_auth_entry_state(page)
+        # 点不动也走不了时必须报 unknown，否则调用方会拿着 protect_account
+        # 反复调回本函数，刷出上百行重复日志（实测过）
+        if st == 'protect_account' and not left:
+            log('protect_account', '无跳过链且仍在此页，交由上层重新导航', 'WARN')
+            return 'unknown'
+        return st
 
     log('protect_account', 'OAuth 出现保护帐户页（概率事件），尝试绑定', 'WARN')
     cfg = temp_mail_cfg or {}
@@ -349,12 +357,16 @@ def _handle_protect_account(page, log, temp_mail_cfg=None, failure_hook=None, al
             # 辅助邮箱前缀与 Outlook 账号保持一致（取 @ 前部分）
             acct = getattr(_ACCOUNT_CTX, 'email', '')
             acct_name = acct.split('@')[0] if acct and '@' in acct else None
-            result = bind_recovery_email(page, cfg, log=log, name=acct_name)
+            result = bind_recovery_email(page, cfg, log=log, name=acct_name,
+                                         session=getattr(_ACCOUNT_CTX, 'recovery_session', None))
             if isinstance(result, tuple):
                 ok = bool(result[0])
                 session = result[1] if len(result) > 1 else None
             else:
                 ok = bool(result)
+            # 缓存会话：提交邮箱后页面导航，下一轮可能在验证码页重入
+            if session:
+                _ACCOUNT_CTX.recovery_session = session
         except Exception as exc:
             log('protect_account', f'绑定异常: {exc}', 'FAIL')
             ok = False
@@ -886,8 +898,17 @@ def _digest_post_email_states(
     page, log, state, captured_code=None, temp_mail_cfg=None,
     recovery_already_bound=False, recovery_session=None, failure_hook=None, rounds=4,
 ):
-    """邮箱提交后可能出现的中间页：帐户类型 / 绑定保护 / 验证辅助邮箱 / 密钥 / KMSI。"""
+    """邮箱提交后可能出现的中间页：帐户类型 / 绑定保护 / 验证辅助邮箱 / 密钥 / KMSI。
+
+    同一状态连续出现超过 2 次就停 —— 处理函数若无法推进页面（例如保护帐户
+    页无跳过链可点），rounds 循环会反复调同一个 handler 刷重复日志。
+    """
+    seen = {}
     for _ in range(rounds):
+        seen[state] = seen.get(state, 0) + 1
+        if seen[state] > 2:
+            log('digest', f'状态 {state} 反复出现无法推进，停止处理', 'WARN')
+            break
         if state == 'account_type':
             state = _resolve_account_type(page, log, captured_code=captured_code)
             log('account_type', f'处理后状态={state}', 'INFO')
@@ -934,6 +955,8 @@ def _perform_login_after_cookie_fail(
     # 记录当前任务账号，供保护帐户页绑定成功后保存 账号→辅助邮箱 记录
     _ACCOUNT_CTX.email = full_email
     _ACCOUNT_CTX.password = password
+    if recovery_session:
+        _ACCOUNT_CTX.recovery_session = recovery_session
     state = _digest_post_email_states(
         page, log, state, captured_code=captured_code, temp_mail_cfg=temp_mail_cfg,
         recovery_already_bound=recovery_already_bound, recovery_session=recovery_session,
@@ -1182,6 +1205,9 @@ def get_oauth2_token(page, full_email, password, results_dir=None, prefix='', ba
     # 记录当前任务账号，供保护帐户页绑定成功后保存 账号→辅助邮箱 记录
     _ACCOUNT_CTX.email = full_email
     _ACCOUNT_CTX.password = password
+    # 注册阶段的接码会话要带进来：OAuth 侧若重新遇到验证码页，
+    # 没有 jwt 就无法接码，也不能重建邮箱（码已发往旧地址）
+    _ACCOUNT_CTX.recovery_session = recovery_session
     # 同 context 必须 prefer_sso：不要 sso_reload，否则 cookie 会话被强制打断
     auth_url = build_auth_url(prefer_sso=True)
 

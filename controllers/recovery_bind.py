@@ -321,76 +321,108 @@ def _skip_protect(page, log):
     return False
 
 
-def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=None):
-    """在保护帐户页绑定备用邮箱并输入验证码。
+def is_any_code_page(page):
+    """验证码页（旧版单框 #iOttText 或新版 6 格 #codeEntry-*）。"""
+    try:
+        if is_ott_code_page(page):
+            return True
+    except Exception:
+        pass
+    try:
+        return is_code_entry_page(page)
+    except Exception:
+        return False
 
-    name: 可选，指定邮箱前缀（本地部分）。不传则自动生成。
 
-    成功返回 (True, session_dict)，session 含 address/jwt 供 OAuth 冷登录复用。
-    失败返回 (False, None)。
+def _wait_for_code_page(page, timeout_sec=40, log=None):
+    """轮询等验证码页出现。
+
+    不能用 locator.wait_for(state="visible")：点「下一步」提交邮箱后页面正在
+    导航，执行上下文被销毁会让 wait_for 立即抛异常（实测：传 30s 超时，
+    1s 就抛了），超时参数形同虚设。这里自己轮询并吞掉导航期异常。
     """
-    def _log(stage, msg, level="INFO"):
-        if log:
-            log(stage, msg, level)
-
-    if not is_protect_account_page(page) and not is_ott_code_page(page):
-        return False, None
-
-    if is_ott_code_page(page) and not is_protect_account_page(page):
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if is_any_code_page(page):
+            return True
         try:
-            if page.locator(BACKUP_EMAIL_SELECTOR).count() == 0:
-                _log("recovery", "仅代码页且无邮箱框，跳过二次绑定", "WARN")
-                return True, None
+            page.wait_for_timeout(500)
+        except Exception:
+            time.sleep(0.5)
+    if log:
+        log("recovery", f"等验证码页超时 ({timeout_sec}s)", "WARN")
+    return False
+
+
+def _submit_code_any(page, code, log=None):
+    """按页面实际形态填码。
+
+    - 6 格 #codeEntry-*：无提交按钮，填满自动验证
+    - 单框 #iOttText：需点「下一步」(#iNext)
+    """
+    def _log(msg, level="INFO"):
+        if log:
+            log("recovery", msg, level)
+
+    if is_code_entry_page(page):
+        if not _fill_code_entry_digits(page, code):
+            _log(f"6 格填码失败 code={code}", "FAIL")
+            return False
+        _log(f"已填入 6 格验证码 code={code}（自动提交）", "OK")
+        return True
+
+    try:
+        ott = page.locator(VERIFY_CODE_SELECTOR).first
+        ott.click(timeout=3000)
+        try:
+            ott.fill("")
         except Exception:
             pass
-        _log("recovery", "已在代码页但无法新建接码会话", "FAIL")
-        return False, None
-
-    client = client_from_config(temp_mail_cfg or {})
-    try:
-        addr, jwt = client.create_address(name=name)
-    except Exception as exc:
-        _log("recovery", f"创建临时邮箱失败: {exc}", "FAIL")
-        _skip_protect(page, log)
-        return False, None
-
-    session = {
-        "address": addr,
-        "jwt": jwt,
-        "base_url": client.base_url,
-        "admin_password": client.admin_password,
-        "domain": client.domain,
-    }
-    _log("recovery", f"临时邮箱已创建 addr={addr}（本任务独立 jwt）", "OK")
-    after_ts = time.time()
-
-    try:
-        email_box = page.locator(BACKUP_EMAIL_SELECTOR).first
-        email_box.wait_for(state="visible", timeout=10000)
-        email_box.click(timeout=3000)
-        email_box.fill("")
-        email_box.fill(addr, timeout=5000)
+        ott.fill(code, timeout=5000)
         page.wait_for_timeout(300)
         if not _click_i_next(page):
-            raise RuntimeError("无法点击下一步提交备用邮箱")
-        _log("recovery", f"已提交备用邮箱 {addr}", "INFO")
-    except Exception as exp:
-        _log("recovery", f"填写备用邮箱失败: {exp}", "FAIL")
-        _skip_protect(page, log)
-        return False, None
+            # 部分版本无 #iNext，回车也能提交
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                _log("无法提交验证码（无下一步按钮且回车失败）", "FAIL")
+                return False
+        _log(f"已提交单框验证码 code={code}", "OK")
+        return True
+    except Exception as exc:
+        _log(f"单框填码失败: {exc}", "FAIL")
+        return False
 
-    try:
-        page.locator(VERIFY_CODE_SELECTOR).first.wait_for(state="visible", timeout=30000)
-    except Exception:
-        if is_protect_account_page(page):
-            _log("recovery", "提交后仍在保护帐户页", "WARN")
-            _skip_protect(page, log)
-            return False, None
-        if not is_ott_code_page(page):
-            _log("recovery", "未出现验证码输入框，视为可能已完成", "WARN")
-            return True, session
 
-    page.wait_for_timeout(2000)
+def _left_code_page(page, timeout_sec=15):
+    """等验证码页消失 —— 确认微软真的接受了验证码。
+
+    不验证就直接返回成功的后果：辅助邮箱实际没绑上，却往
+    recovery_emails.txt 写了一条假记录。
+    """
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if not is_any_code_page(page):
+            return True
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            time.sleep(0.5)
+    return False
+
+
+def _finish_code_stage(page, session, temp_mail_cfg, code_timeout, log=None):
+    """已在验证码页：接码 → 填码 → 确认离开该页。"""
+    def _log(msg, level="INFO"):
+        if log:
+            log("recovery", msg, level)
+
+    client = _client_from_session(session, temp_mail_cfg)
+    if client is None:
+        _log("缺少接码会话 jwt，无法取验证码", "FAIL")
+        return False, session
+
+    after_ts = float(session.get("after_ts") or time.time())
     code = client.wait_for_code(
         timeout_sec=int((temp_mail_cfg or {}).get("code_timeout", code_timeout)),
         poll_sec=float((temp_mail_cfg or {}).get("poll_interval", 3)),
@@ -398,29 +430,113 @@ def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=No
         log=log,
     )
     if not code:
-        _log("recovery", "未收到微软验证码，尝试暂时跳过", "FAIL")
+        _log("未收到微软验证码，尝试暂时跳过", "FAIL")
         try:
             page.go_back(timeout=5000)
             page.wait_for_timeout(1000)
             _skip_protect(page, log)
         except Exception:
             pass
+        return False, session
+
+    if not _submit_code_any(page, code, log=log):
+        return False, session
+
+    if not _left_code_page(page, timeout_sec=15):
+        _log(f"提交验证码后仍停在验证码页（code={code} 可能被拒）", "FAIL")
+        return False, session
+
+    _log(f"辅助邮箱绑定完成 addr={session.get('address')}", "OK")
+    return True, session
+
+
+def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=None,
+                        session=None):
+    """在保护帐户页绑定备用邮箱并输入验证码。
+
+    name: 可选，指定邮箱前缀（本地部分）。不传则自动生成。
+    session: 同一任务内重入时传回上次的接码会话。微软提交邮箱后页面会导航，
+        调用方很容易在验证码页重新进来 —— 没有 session 就无法接码，
+        也不能重新建邮箱（验证码已经发到上一个地址了）。
+
+    返回 (ok, session)。session 含 address/jwt/after_ts，供重入与 OAuth 冷登录复用。
+    即使失败也会尽量把 session 送回，避免下一轮重建邮箱。
+    """
+    def _log(stage, msg, level="INFO"):
+        if log:
+            log(stage, msg, level)
+
+    on_protect = is_protect_account_page(page)
+    on_code = is_any_code_page(page)
+    if not on_protect and not on_code:
+        return False, session
+
+    # --- 情况 A：已在验证码页（上一轮已提交过邮箱）---
+    if on_code and not on_protect:
+        if session and session.get("jwt"):
+            _log("recovery", "重入验证码页，复用已有接码会话继续", "INFO")
+            return _finish_code_stage(page, session, temp_mail_cfg, code_timeout, log=log)
+        # 无会话：验证码已发往未知地址，无法接码也不能假装成功
+        _log("recovery", "已在验证码页但无接码会话，无法完成绑定", "FAIL")
+        _skip_protect(page, log)
         return False, None
 
+    # --- 情况 B：在邮箱输入页 ---
+    if session and session.get("jwt"):
+        # 复用上轮地址，不重建 —— 每轮新建会洗掉已收到的验证码
+        addr = session.get("address")
+        client = _client_from_session(session, temp_mail_cfg)
+        if client is None:
+            session = None
+        else:
+            _log("recovery", f"复用上轮临时邮箱 addr={addr}", "INFO")
+
+    if not (session and session.get("jwt")):
+        client = client_from_config(temp_mail_cfg or {})
+        try:
+            addr, jwt = client.create_address(name=name)
+        except Exception as exc:
+            _log("recovery", f"创建临时邮箱失败: {exc}", "FAIL")
+            _skip_protect(page, log)
+            return False, None
+        session = {
+            "address": addr,
+            "jwt": jwt,
+            "base_url": client.base_url,
+            "admin_password": client.admin_password,
+            "domain": client.domain,
+        }
+        _log("recovery", f"临时邮箱已创建 addr={addr}（本任务独立 jwt）", "OK")
+
+    # after_ts 必须在提交前取，否则会漏接已到达的信
+    session["after_ts"] = time.time()
+
     try:
-        ott = page.locator(VERIFY_CODE_SELECTOR).first
-        ott.click(timeout=3000)
-        ott.fill("")
-        ott.fill(code, timeout=5000)
+        email_box = page.locator(BACKUP_EMAIL_SELECTOR).first
+        email_box.wait_for(state="visible", timeout=10000)
+        email_box.click(timeout=3000)
+        email_box.fill("")
+        email_box.fill(session["address"], timeout=5000)
         page.wait_for_timeout(300)
         if not _click_i_next(page):
-            raise RuntimeError("无法点击下一步提交验证码")
-        _log("recovery", f"已提交验证码 code={code}", "OK")
-        page.wait_for_timeout(1500)
-        return True, session
-    except Exception as exc:
-        _log("recovery", f"提交验证码失败: {exc}", "FAIL")
-        return False, None
+            raise RuntimeError("无法点击下一步提交备用邮箱")
+        _log("recovery", f"已提交备用邮箱 {session['address']}", "INFO")
+    except Exception as exp:
+        _log("recovery", f"填写备用邮箱失败: {exp}", "FAIL")
+        _skip_protect(page, log)
+        return False, session
+
+    if not _wait_for_code_page(page, timeout_sec=40, log=log):
+        if is_protect_account_page(page):
+            _log("recovery", "提交后仍在保护帐户页", "WARN")
+            _skip_protect(page, log)
+            return False, session
+        # 不再把「没看到验证码框」当成完成 —— 之前这么判导致辅助邮箱
+        # 实际没绑上，却往 recovery_emails.txt 写了假记录
+        _log("recovery", "提交邮箱后未出现验证码页，本轮绑定未完成", "WARN")
+        return False, session
+
+    return _finish_code_stage(page, session, temp_mail_cfg, code_timeout, log=log)
 
 
 def _client_from_session(session, temp_mail_cfg):

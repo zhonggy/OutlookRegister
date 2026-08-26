@@ -1032,15 +1032,15 @@ class OutlookController:
             return False
 
     def _try_bind_recovery_email(self, page):
-        """保护帐户页：创建临时邮箱 → 填 #EmailAddress → 接码 → #iOttText。失败则调用方再 skip。"""
+        """保护帐户页：创建临时邮箱 → 填 #EmailAddress → 接码 → 填码。失败则调用方再 skip。"""
         if not self.bind_recovery_email:
             return False
         try:
-            from controllers.recovery_bind import bind_recovery_email, is_protect_account_page, is_ott_code_page
+            from controllers.recovery_bind import bind_recovery_email, is_protect_account_page, is_any_code_page
         except Exception as exc:
             self.log_event('REGISTER', 'WARN', 'recovery', f'加载 recovery_bind 失败: {exc}')
             return False
-        if not is_protect_account_page(page) and not is_ott_code_page(page):
+        if not is_protect_account_page(page) and not is_any_code_page(page):
             return False
 
         def _log(stage, message, level='INFO'):
@@ -1049,22 +1049,31 @@ class OutlookController:
         # 辅助邮箱前缀与 Outlook 账号保持一致（grtbyazdfncld@outlook.com → grtbyazdfncld@1313223.cyou）
         reg_email = getattr(self.thread_local, '_reg_email', '')
         reg_name = reg_email.split('@')[0] if reg_email and '@' in reg_email else None
-        result = bind_recovery_email(page, self.temp_mail_cfg, log=_log, name=reg_name)
+        # 微软提交邮箱后页面会导航，本函数可能在验证码页重新被调用；
+        # 把上轮会话传回去，否则无法接码（验证码已发往上一个地址）
+        prev_session = getattr(self.thread_local, 'recovery_mail_session', None)
+        result = bind_recovery_email(
+            page, self.temp_mail_cfg, log=_log, name=reg_name, session=prev_session,
+        )
         # 兼容 (ok, session) 或旧版 bool
         if isinstance(result, tuple):
             ok, session = result[0], (result[1] if len(result) > 1 else None)
         else:
             ok, session = bool(result), None
+        # 即使失败也缓存 session，供下一轮重入时接码
+        if session:
+            self.thread_local.recovery_mail_session = session
         if ok:
             self.thread_local.recovery_email_bound = True
             self.thread_local.recovery_email_skipped = False
             if session:
-                self.thread_local.recovery_mail_session = session
                 self.log_event(
                     'REGISTER', 'INFO', 'recovery_session',
                     f"已保存辅助邮箱会话 addr={session.get('address')}",
                 )
             # 保存 账号→辅助邮箱 绑定记录到 Results/recovery_emails.txt
+            # 仅在真正绑定成功后写 —— 以前「未出现验证码框」也算成功，
+            # 结果文件里满是实际没绑上的假记录
             try:
                 from controllers.recovery_bind import save_recovery_record
                 save_recovery_record(
@@ -1102,12 +1111,22 @@ class OutlookController:
 
         # 1) 「让我们来保护你的帐户」：主路径绑定；失败才暂时跳过
         try:
-            from controllers.recovery_bind import is_protect_account_page, is_ott_code_page
-            on_protect = is_protect_account_page(page) or is_ott_code_page(page)
+            from controllers.recovery_bind import is_protect_account_page, is_any_code_page
+            on_protect = is_protect_account_page(page) or is_any_code_page(page)
         except Exception:
-            on_protect = page.locator('#EmailAddress').count() > 0 or page.locator('#iOttText').count() > 0
+            on_protect = (page.locator('#EmailAddress').count() > 0
+                          or page.locator('#iOttText').count() > 0
+                          or page.locator('#codeEntry-0').count() > 0)
 
         if on_protect and self.bind_recovery_email:
+            # 绑定成功过就不再重入 —— 以前没这层守卫，导致在验证码页
+            # 反复调用并每次都返回 True，刷出上百行重复日志
+            if getattr(self.thread_local, 'recovery_email_bound', False):
+                if self._click_if_visible(page.locator('#iShowSkip')):
+                    self.log_event('REGISTER', 'INFO', 'recovery',
+                                   '已绑定，点跳过离开保护帐户页')
+                    return True
+                return False
             if self._try_bind_recovery_email(page):
                 self.log_event(
                     'REGISTER', 'OK', 'recovery_bind',
@@ -1115,6 +1134,20 @@ class OutlookController:
                 )
                 acted = True
             else:
+                # 绑定未完成：若仍在验证码页则下一轮继续（会话已缓存），
+                # 已回到邮箱页/其他页才跳过
+                try:
+                    from controllers.recovery_bind import is_any_code_page as _code_page
+                    still_code = _code_page(page)
+                except Exception:
+                    still_code = False
+                if still_code:
+                    self.thread_local._recovery_retry = (
+                        getattr(self.thread_local, '_recovery_retry', 0) + 1)
+                    if self.thread_local._recovery_retry <= 2:
+                        return True   # 给下一轮继续接码的机会
+                    self.log_event('REGISTER', 'WARN', 'recovery',
+                                   '验证码页重试已达上限，放弃绑定')
                 if self._click_if_visible(page.locator('#iShowSkip')):
                     self._mark_recovery_skipped()
                     self.log_event(
@@ -1219,6 +1252,7 @@ class OutlookController:
         # 短等：给拦截页一点渲染时间；不出现则继续
         protect_probe_deadline = time.time() + 5.0
         saw_protect = False
+        loop_guard = 0
 
         try:
             page.wait_for_timeout(1200)
@@ -1227,12 +1261,13 @@ class OutlookController:
 
         while time.time() < deadline:
             try:
-                from controllers.recovery_bind import is_protect_account_page, is_ott_code_page
-                on_protect = is_protect_account_page(page) or is_ott_code_page(page)
+                from controllers.recovery_bind import is_protect_account_page, is_any_code_page
+                on_protect = is_protect_account_page(page) or is_any_code_page(page)
             except Exception:
                 on_protect = (
                     page.locator('#EmailAddress').count() > 0
                     or page.locator('#iOttText').count() > 0
+                    or page.locator('#codeEntry-0').count() > 0
                     or page.locator('#iShowSkip').count() > 0
                 )
             if on_protect:
@@ -1244,6 +1279,23 @@ class OutlookController:
                 saw_protect = True
 
             if self._dismiss_post_register_intercepts(page):
+                # 同一页面反复处理仍不前进时要强行跳出 —— 之前无此上限，
+                # 验证码页上 acted 永远为 True，循环每秒刷一行日志直到超时
+                loop_guard += 1
+                if loop_guard > 12:
+                    self.log_event(
+                        'REGISTER', 'WARN', 'intercept_loop',
+                        f'拦截页处理已重复 {loop_guard} 次仍未离开，强行跳转邮箱',
+                    )
+                    if self._click_if_visible(page.locator('#iShowSkip')):
+                        self._mark_recovery_skipped()
+                    try:
+                        page.goto(mail_url, timeout=25000, wait_until='domcontentloaded')
+                        page.wait_for_timeout(1500)
+                    except Exception:
+                        pass
+                    loop_guard = 0
+                    continue
                 page.wait_for_timeout(800)
                 continue
 
