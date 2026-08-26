@@ -103,7 +103,8 @@ class AboutView(QWidget):
         upd_layout.addWidget(hint_label(
             "不会自动更新。更新前请先停止正在运行的注册任务 —— "
             "worker 进程占用程序文件会导致更新失败。<br>"
-            "若 GitHub 无法访问，会按设置里的选项尝试使用代理。"))
+            "若 GitHub 无法访问，会按设置里的选项尝试使用代理。<br>"
+            "更新过程会写 <code>log\\update.log</code>，出问题时看这个文件。"))
         layout.addWidget(upd_box)
         layout.addStretch(1)
 
@@ -135,7 +136,8 @@ class AboutView(QWidget):
             return
         if not confirm(self, "立即更新",
                        "程序将关闭并安装更新，完成后自动重启。\n\n"
-                       "config.json、Results、log 会被保留。继续？"):
+                       "config.json、Results、log 会被保留。\n"
+                       "若 30 秒后窗口仍未重新出现，请看 log\\update.log。\n\n继续？"):
             return
         result = updater.apply_and_restart()
         self.status.show_result(

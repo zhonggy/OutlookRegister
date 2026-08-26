@@ -5,13 +5,14 @@
 模式：
     OutlookRegister.exe                 启动桌面 GUI  —— 默认
     OutlookRegister.exe --worker        注册执行进程（由 GUI 拉起）
+    OutlookRegister.exe --apply-update  落地更新（由旧版拉起）
     OutlookRegister.exe --version       打印版本
 
 打包后 sys.executable 就是 OutlookRegister.exe，GUI 用 --worker 重入自身，
 保持进程隔离：注册崩溃不影响界面，停止 = 向进程发信号触发其清理逻辑。
 
---worker 分支绝不导入 PySide6：注册进程不需要界面，加载一整套 Qt 只是
-白占内存，而且 CREATE_NO_WINDOW 下无窗口环境，Qt 初始化本身可能失败。
+--worker 与 --apply-update 分支都不导入 PySide6：它们不需要界面，加载
+一整套 Qt 只是白占内存，而且无窗口环境下 Qt 初始化本身可能失败。
 """
 import os
 import sys
@@ -92,6 +93,16 @@ def _run_worker() -> int:
     return 0
 
 
+def _run_apply_update(argv: list) -> int:
+    """落地更新。
+
+    这里跑的是解压在 update_staging/extracted 里的新版 exe —— 它锁的是
+    那份 _internal，因此能自由覆盖安装目录里的旧文件。
+    """
+    import apply_update
+    return apply_update.run(argv)
+
+
 def _run_gui() -> int:
     import gui
     return gui.run(sys.argv)
@@ -104,11 +115,25 @@ def main() -> int:
         print(appver.DISPLAY_NAME)
         return 0
 
+    # 落地更新要在 _bootstrap_data_dir 之前处理：本进程跑在 update_staging 里，
+    # 不应该在那里生成 config.json / log / Results
+    if argv and argv[0] == "--apply-update":
+        return _run_apply_update(argv[1:])
+
     is_worker = "--worker" in argv
     _bootstrap_data_dir(quiet=not is_worker)
 
     if is_worker:
         return _run_worker()
+
+    # 更新后首次启动：清掉遗留的 update_staging。
+    # 落地进程自己就在那个目录里，删不掉自己所在位置。
+    try:
+        import apply_update
+        apply_update.cleanup_staging(paths.APP_DIR)
+    except Exception:
+        pass
+
     return _run_gui()
 
 

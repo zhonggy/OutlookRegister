@@ -119,7 +119,8 @@ hiddenimports += collect_submodules("faker")       # provider 全靠动态导入
 hiddenimports += collect_submodules("patchright")
 # GUI 页面由 gui/views/__init__.py 汇总导入，这里兜一层
 hiddenimports += collect_submodules("gui")
-hiddenimports += ["core", "paths", "updater", "version", "utils", "main"]
+hiddenimports += ["core", "paths", "updater", "apply_update", "version",
+                  "utils", "main"]
 hiddenimports += ["controllers", "controllers.oauth2", "controllers.outlook_controller",
                   "controllers.recovery_bind", "controllers.temp_mail"]
 

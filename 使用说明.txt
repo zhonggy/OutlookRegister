@@ -75,10 +75,15 @@ log\                         运行日志，按时间分文件
 不会自动更新。到「关于与更新」页点「检查更新」。
 
 流程：检查 → 下载 → 校验 → 点「立即重启并更新」。
-程序会自行退出、覆盖程序文件、然后重新启动。
+程序会自行退出，由新版本等旧进程完全退出后覆盖程序文件，然后重新启动。
+整个过程通常 10 秒内完成，请耐心等窗口自己回来。
 
 更新时以下内容一律保留：
-  config.json、Results\、log\、browser_profiles\、browsers\
+  config.json、admin.json、Results\、log\、browser_profiles\、browsers\
+
+每次更新都会把旧的 exe 与 _internal 备份到 backup_prev\，
+覆盖中途出错会自动回滚，不会留下半新半旧的程序。
+更新过程的每一步都写入 log\update.log。
 
 更新前请先停止正在运行的注册任务，否则程序文件被占用会导致更新失败
 （程序会检查并拦住你）。如果 GitHub 连不上，会按设置里的选项尝试用代理。
@@ -91,8 +96,17 @@ A: 看 log\gui.out 文件，启动期的报错都在里面。
 Q: 提示目录不可写
 A: 把整个文件夹移到 D 盘等有写权限的位置，不要放 C:\Program Files。
 
+Q: 点了「立即重启并更新」后程序没重启
+A: 看 log\update.log，里面有每一步的时间与结果。若提示“旧进程未退出”，
+   先在任务管理器里结束所有 OutlookRegister.exe，再手动双击启动。
+   若提示复制失败，程序会自动从 backup_prev 回滚到旧版本，不会变成半残状态。
+
 Q: 提示「程序已在运行」但看不到窗口
 A: 在任务管理器里结束残留的 OutlookRegister.exe 后重新启动。
+
+Q: 目录里剩下了 update_staging 或 backup_prev
+A: 都可以直接删。update_staging 是更新暂存，下次启动会自动清理；
+   backup_prev 是上一版备份，保留着只为了万一需要手动恢复。
 
 Q: 杀毒软件报毒
 A: PyInstaller 打包 + 浏览器自动化容易被误报，且本程序未做代码签名。

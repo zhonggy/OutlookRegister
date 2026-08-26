@@ -1,9 +1,15 @@
-"""手动更新：查 GitHub Release → 下载 patch 包 → 校验 → 交给 apply.bat 落地。
+"""手动更新：查 GitHub Release → 下载 patch 包 → 校验 → 拉起新版 exe 落地。
 
-不自动更新。用户在控制台点「检查更新」才发起。
+不自动更新。用户在「关于与更新」里点检查才发起。
 
-落地必须由外部脚本完成：运行中的 exe 无法覆盖自己，也无法覆盖被自己
-加载的 _internal/*.dll。因此生成 apply.bat，等本进程退出后再 robocopy。
+落地不能由本进程完成：运行中的 exe 无法覆盖自己，也无法覆盖被自己
+加载的 _internal/*.dll。旧版用 apply.bat，但它在 DETACHED_PROCESS
+（无控制台）下彻底失效 —— tasklist 无输出、timeout 返回 125，
+等待循环直接跳出，2 秒就去覆盖正在运行的程序文件。
+
+现在改由解压出来的**新版 exe** 以 --apply-update 模式执行落地（见
+​apply_update.py）：它跑在 update_staging 里，锁的是那份 _internal，
+因此可以自由覆盖安装目录；等待用 WaitForSingleObject，不依赖控制台。
 """
 import hashlib
 import json
@@ -22,9 +28,9 @@ import requests
 import paths
 import version as appver
 
-# 更新时必须保留的用户数据（robocopy 排除项）
-PRESERVE_DIRS = ["Results", "log", "browser_profiles", "update_staging", "browsers"]
-PRESERVE_FILES = ["config.json", "admin.json", ".push_state", ".write_probe"]
+# 更新时必须保留的用户数据。真正的排除逻辑在 apply_update.py 里，
+# 这里只用于提示文案，两处定义保持一致。
+from apply_update import PRESERVE_DIRS, PRESERVE_FILES  # noqa: E402
 
 _state = {
     "phase": "idle",      # idle|checking|available|downloading|verifying|ready|error|uptodate
@@ -41,7 +47,9 @@ _state = {
 
 
 def snapshot() -> dict:
-    d = {k: v for k, v in _state.items() if k != "lock"}
+    # 下划线开头的是内部状态（下载 URL、新 exe 路径等），不往 UI 送
+    d = {k: v for k, v in _state.items()
+         if k != "lock" and not k.startswith("_")}
     if d["size"]:
         d["percent"] = round(d["downloaded"] * 100.0 / d["size"], 1)
     else:
@@ -205,61 +213,14 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-APPLY_BAT = r"""@echo off
-chcp 65001 >nul
-setlocal
-set "PID=%~1"
-set "SRC=%~2"
-set "DST=%~3"
-set "EXE=%~4"
-set "STAGE=%~5"
-
-echo [update] waiting for pid %PID% to exit...
-for /L %%i in (1,1,60) do (
-  tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul || goto :gone
-  timeout /t 1 /nobreak >nul
-)
-echo [update] timeout waiting for exit, abort.
-exit /b 1
-
-:gone
-timeout /t 2 /nobreak >nul
-echo [update] backing up...
-if exist "%DST%\backup_prev" rmdir /S /Q "%DST%\backup_prev"
-mkdir "%DST%\backup_prev" 2>nul
-if exist "%DST%\_internal" robocopy "%DST%\_internal" "%DST%\backup_prev\_internal" /E /NFL /NDL /NJH /NJS /NP >nul
-if exist "%EXE%" copy /Y "%EXE%" "%DST%\backup_prev\" >nul
-
-echo [update] copying new files...
-robocopy "%SRC%" "%DST%" /E /IS /IT /NFL /NDL /NJH /NJS /NP __XD__ __XF__
-if %ERRORLEVEL% GEQ 8 (
-  echo [update] copy failed, restoring...
-  if exist "%DST%\backup_prev\_internal" robocopy "%DST%\backup_prev\_internal" "%DST%\_internal" /E /IS /IT /NFL /NDL /NJH /NJS /NP >nul
-  if exist "%DST%\backup_prev\%~nx4" copy /Y "%DST%\backup_prev\%~nx4" "%EXE%" >nul
-  echo [update] restored. see you.
-  pause
-  exit /b 1
-)
-
-echo [update] cleanup...
-rmdir /S /Q "%STAGE%" 2>nul
-
-echo [update] restarting...
-start "" "%EXE%"
-exit /b 0
-"""
-
-
-def _write_apply_bat(src: Path, stage: Path) -> Path:
-    # /XD /XF 用相对名而非绝对路径：robocopy 对源侧做匹配，传目标路径永远匹配不上，
-    # 保护作用会静默失效 —— 后果是用户的 config.json / Results 被覆盖。
-    xd = " ".join(f'/XD "{d}"' for d in PRESERVE_DIRS)
-    xf = " ".join(f'/XF "{f}"' for f in PRESERVE_FILES)
-    body = APPLY_BAT.replace("__XD__", xd).replace("__XF__", xf)
-    bat = stage / "apply.bat"
-    # cmd 对 LF 换行会解析异常，必须 CRLF
-    bat.write_text(body.replace("\r\n", "\n").replace("\n", "\r\n"), encoding="utf-8")
-    return bat
+def _find_new_exe(src: Path) -> Path | None:
+    """在解压出的更新包里找可执行的新版 exe。"""
+    for name in ("OutlookRegister.exe",):
+        cand = src / name
+        if cand.is_file():
+            return cand
+    exes = [p for p in src.glob("*.exe")]
+    return exes[0] if exes else None
 
 
 def download_and_stage() -> dict:
@@ -314,12 +275,21 @@ def download_and_stage() -> dict:
     entries = list(extracted.iterdir())
     if len(entries) == 1 and entries[0].is_dir():
         extracted = entries[0]
-    if not (extracted / "_internal").is_dir() and not any(
-            p.suffix.lower() == ".exe" for p in extracted.iterdir()):
-        _set(phase="error", message="更新包结构异常：未找到 _internal 或 exe")
+
+    # 落地靠的就是这份新版 exe 自己跑 --apply-update，因此它必须存在
+    # 且带完整 _internal（能脉离安装目录独立运行）
+    new_exe = _find_new_exe(extracted)
+    if new_exe is None:
+        _set(phase="error", message="更新包里没有 exe，无法落地")
+        return snapshot()
+    if not (extracted / "_internal").is_dir():
+        _set(phase="error", message="更新包缺少 _internal 目录，结构异常")
         return snapshot()
 
-    _write_apply_bat(extracted, stage)
+    with _state["lock"]:
+        _state["_new_exe"] = str(new_exe)
+        _state["_payload"] = str(extracted)
+
     _set(phase="ready",
          message=f"{remote} 已就绪，点「立即重启并更新」完成安装"
                  + ("（校验通过）" if want else "（release 未提供 SHA256，已跳过校验）"))
@@ -327,29 +297,47 @@ def download_and_stage() -> dict:
 
 
 def apply_and_restart() -> dict:
-    """启动 apply.bat 并让本进程退出。调用方须先停掉注册任务。"""
+    """拉起新版 exe 的 --apply-update 模式，然后让本进程退出。
+
+    调用方需先停掉注册任务 —— worker 占着 _internal/*.dll 会让覆盖失败。
+    """
     stage = paths.UPDATE_DIR
-    bat = stage / "apply.bat"
-    src = stage / "extracted"
-    entries = [p for p in src.iterdir()] if src.is_dir() else []
-    if len(entries) == 1 and entries[0].is_dir():
-        src = entries[0]
-    if not bat.is_file():
+    with _state["lock"]:
+        new_exe_str = _state.get("_new_exe", "")
+        payload_str = _state.get("_payload", "")
+
+    src = Path(payload_str) if payload_str else (stage / "extracted")
+    if not src.is_dir():
         _set(phase="error", message="更新未就绪，请先下载")
         return snapshot()
-    exe = Path(sys.executable)
+
+    new_exe = Path(new_exe_str) if new_exe_str else _find_new_exe(src)
+    if new_exe is None or not new_exe.is_file():
+        _set(phase="error", message="未找到新版 exe，请重新下载")
+        return snapshot()
+
+    target_exe = Path(sys.executable)
+    if not getattr(sys, "frozen", False):
+        _set(phase="error", message="源码模式不支持自动更新，请用 git pull")
+        return snapshot()
+
     try:
         subprocess.Popen(
-            ["cmd", "/c", str(bat), str(os.getpid()), str(src),
-             str(paths.APP_DIR), str(exe), str(stage)],
-            cwd=str(stage),
+            [str(new_exe), "--apply-update", str(os.getpid()),
+             str(src), str(paths.APP_DIR), str(target_exe)],
+            cwd=str(src),
             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
             close_fds=True,
         )
     except Exception as exc:
-        _set(phase="error", message=f"启动更新脚本失败: {exc}")
+        _set(phase="error", message=f"启动更新程序失败: {exc}")
         return snapshot()
-    _set(phase="restarting", message="更新脚本已启动，程序即将退出并自动重启")
-    threading.Thread(target=lambda: (time.sleep(1.5), os._exit(0)), daemon=True).start()
+
+    _set(phase="restarting",
+         message="更新程序已启动，本程序即将退出并自动重启")
+    # 给 UI 一点时间把提示画出来，再硬退 —— 落地进程正在等我们死
+    threading.Thread(
+        target=lambda: (time.sleep(1.2), os._exit(0)), daemon=True,
+    ).start()
     return snapshot()
