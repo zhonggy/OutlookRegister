@@ -44,6 +44,15 @@ jobs:
           pip install -r requirements-build.txt
           pip list
 
+      - name: GUI smoke test (source mode)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # 先在源码模式验证 GUI 能构造，比等打包完再发现问题快得多
+          python tests/smoke_gui.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Install Chromium for patchright
         shell: pwsh
         run: |
@@ -77,7 +86,7 @@ jobs:
       - name: Syntax check
         shell: pwsh
         run: |
-          python -m compileall -q app.py main.py web_console.py updater.py paths.py version.py utils.py start_local.py build.py release_notes.py controllers
+          python -m compileall -q app.py main.py core.py updater.py paths.py version.py utils.py start_local.py build.py release_notes.py rthook_streams.py controllers gui
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Build

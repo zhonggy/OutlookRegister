@@ -1,7 +1,8 @@
 <h1 align="center">OutlookRegister</h1>
 
 <p align="center">
-  Outlook / Hotmail 自动注册，并获取 Microsoft Graph OAuth2 <code>refresh_token</code>（基于 patchright 浏览器自动化）。
+  Outlook / Hotmail 自动注册，并获取 Microsoft Graph OAuth2 <code>refresh_token</code>（基于 patchright 浏览器自动化）。<br>
+  自带桌面界面，Windows 绿色便携版解压即用。
 </p>
 
 <p align="center">
@@ -14,6 +15,7 @@
   <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="License MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
   <img alt="patchright" src="https://img.shields.io/badge/Browser-patchright-4B5563">
+  <img alt="GUI PySide6" src="https://img.shields.io/badge/GUI-PySide6-41CD52?logo=qt&logoColor=white">
   <img alt="Platform" src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-blue">
 </p>
 
@@ -32,9 +34,10 @@
 
 ### 1. 环境要求
 
-- 建议 Python 3.10+  
-- 可用的 HTTP/SOCKS 代理（强烈建议）  
-- 若开启辅助邮箱绑定：兼容的临时邮箱 / CF Temp Mail 类 API  
+- 打包版：无（Windows 解压即用，内置 Chromium）
+- 源码模式：建议 Python 3.10+
+- 可用的 HTTP/SOCKS 代理（强烈建议）
+- 若开启辅助邮箱绑定：兼容的临时邮箱 / CF Temp Mail 类 API
 
 ### 2. 安装
 
@@ -59,8 +62,15 @@ cp config.example.json config.json
 
 ### 4. 运行
 
+**打包版（推荐）** —— 从 [Releases](https://github.com/zhonggy/OutlookRegister/releases) 下载，
+解压后双击 `OutlookRegister.exe`。自带桌面界面与内置 Chromium，无需 Python。
+
+**源码模式**
+
 ```bash
-python main.py
+python app.py              # 启动桌面 GUI
+python app.py --worker     # 直接跑注册（无界面，适合服务器）
+python app.py --version    # 看版本号
 ```
 
 成功账号会**追加**写入 `Results/oauth2.txt`：
@@ -69,7 +79,25 @@ python main.py
 邮箱----密码----client_id----refresh_token
 ```
 
-日志在 `log/`。按 **Ctrl+C** 可中断：先写汇总，再关闭浏览器并清理 profile。
+日志在 `log/`。GUI 里点「停止」或命令行按 **Ctrl+C** 可中断：
+先写汇总，再关浏览器并清理 profile。
+
+---
+
+## 自己构建 exe
+
+构建在 GitHub Actions（windows-latest）上进行，也可本地跑：
+
+```bash
+pip install -r requirements-build.txt
+patchright install chromium
+python build.py
+```
+
+产物在 `artifacts/`：`-full.zip`（含内置 Chromium）与 `-patch.zip`（仅程序文件，用于更新）。
+
+发版：改 `version.py` 的 `VERSION` → 提交 → `git tag v1.1 && git push origin v1.1`。
+CI 会校验 tag 与 `version.py` 一致，不一致直接失败。
 
 ---
 
@@ -93,6 +121,12 @@ python main.py
 | `proxy` | object | 代理配置（正式使用必填）。 |
 | `oauth2` | object | Graph OAuth2 配置。 |
 | `temp_mail` | object | 可选：保护帐户页自动绑定辅助邮箱。 |
+| `page_open_timeout` | number | 注册页打开超时（秒），默认 30。 |
+| `browser` | object | 浏览器指纹与自定义内核。 |
+| `resin` | object | 可选：Resin 外部粘性代理池。 |
+| `outlook_manager` | object | 可选：注册成功后自动推送到 OutlookManage。 |
+| `proxy_pool` | object | 可选：源码模式下一键启动脚本拉起外部代理池。 |
+| `update` | object | 可选：检查更新时的代理与 GitHub Token。 |
 
 ### `captcha_strategy`
 
@@ -138,6 +172,43 @@ python main.py
 | `code_timeout` | number | 等待验证码邮件的超时（秒）。 |
 | `poll_interval` | number | 轮询收件箱间隔（秒）。 |
 
+### `browser`
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `fingerprint_enabled` | bool | 启用 patchright 指纹伪装（Canvas/WebGL/UA 等）。 |
+| `fingerprint_platform` | string | `windows` / `macos` / `linux` / `android` / `ios`。 |
+| `fingerprint_brand` | string | `Chrome` / `Edge` / `Firefox` / `Safari`。 |
+| `executable_path` | string | 自定义内核路径（如 fingerprint-chromium 的 chrome.exe）。留空用内置 Chromium。 |
+| `user_data_root` | string | profile 目录根。留空为程序目录下的 `browser_profiles/`。 |
+
+### `outlook_manager`
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `enabled` | bool | 注册成功后自动推送（异步，失败不阻塞注册）。 |
+| `api_url` | string | 如 `http://IP:18327/api/v1/ingest/accounts`。 |
+| `api_key` | string | OutlookManage 后台创建的密钥（`omk_` 开头）。**勿公开。** |
+
+### `update`
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `use_register_proxy` | bool | 检查更新时复用 `proxy` 里的代理。 |
+| `proxy` | string | 更新专用代理，优先于上面的选项。 |
+| `github_token` | string | 仅仓库为私有时需要。 |
+
+### `proxy_pool`
+
+仅源码模式的 `start_local.py` 使用，打包版不会拉起外部程序。
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `enabled` | bool | 启动时先拉起代理池。 |
+| `exe_path` | string | 代理池可执行文件完整路径。不存在则跳过。 |
+| `config_path` | string | 代理池配置文件路径（可选）。 |
+| `manage_port` | number | 管理端端口，用于就绪探测。 |
+
 ---
 
 ## 项目用途
@@ -158,12 +229,34 @@ OAuth 可处理：个人/工作帐户选择、保护帐户、验证电子邮件�
 
 ## 主要功能
 
-- 多代理并发注册  
-- 按批成功上限重置程序内权重  
-- Cookie 优先 OAuth + 冷启动/新环境兜底  
-- 可选 temp_mail 辅助邮箱绑定  
-- Ctrl+C：先汇总再关浏览器、清 profile  
-- `log/` 进度与失败分类  
+- **桌面 GUI**（PySide6）：仪表盘 / 启动注册 / 系统设置 / 关于与更新四页
+- **双进程模型**：界面与注册进程隔离，注册崩溃不影响界面
+- 多代理并发注册
+- 按批成功上限重置程序内权重
+- Cookie 优先 OAuth + 冷启动/新环境兜底
+- 可选 temp_mail 辅助邮箱绑定
+- 停止/Ctrl+C：先汇总再关浏览器、清 profile
+- `log/` 进度与失败分类
+- 程序内手动检查更新（从 GitHub Releases 下载，不自动更新）
+
+---
+
+## 项目结构
+
+```text
+app.py                  统一入口（无参 = GUI，--worker = 注册进程）
+core.py                 业务后端：配置/进程管理/日志/连通测试（不依赖 Qt）
+main.py                 注册主流程：并发调度、批次控制、中断汇总
+paths.py                路径解析（区分可写数据目录与只读资源目录）
+updater.py              手动更新：检查/下载/校验/落地
+version.py              版本号与版本比较
+gui/                    桌面界面
+  theme.py              配色、字体度量、全局样式表
+  widgets.py            通用组件（指标卡、键值行、状态行）
+  tasks.py              阻塞调用丢后台线程
+  views/                四个页面
+controllers/            浏览器自动化与 OAuth 流程
+```
 
 ---
 

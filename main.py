@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import atexit
@@ -22,6 +23,9 @@ RESULTS_DIR = str(paths.RESULTS_DIR)  # 输出目录（oauth2.txt在此）
 RESULT_WRITE_LOCK = threading.Lock()
 # 默认 fingerprint 目录（与 OutlookController 默认一致）
 DEFAULT_BROWSER_PROFILES = str(paths.PROFILES_ROOT)
+#: 停止请求标志文件。GUI 无控制台，无法用 CTRL_BREAK_EVENT 送信号
+#: （见 _watch_stop_flag 的说明），改由这个文件传递停止意图。
+STOP_FLAG = paths.STOP_FLAG
 # 供 atexit / signal 在任意退出路径清空 profiles
 # interrupt_requested: Ctrl+C 协作停止；summary 必须先于清理写出
 _RUNTIME = {
@@ -64,6 +68,42 @@ def _request_interrupt(signum=None, frame=None):
     """
     _RUNTIME['interrupt_requested'] = True
     raise KeyboardInterrupt()
+
+
+def _watch_stop_flag(poll_sec=0.5):
+    """轮询停止标志文件，出现即触发与 Ctrl+C 完全相同的中断路径。
+
+    为什么不用信号：GUI 进程是 windowed 的，没有控制台，
+    GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT) 只能触达与调用方共享同一
+    控制台的进程 —— 而 worker 又是用 CREATE_NO_WINDOW 启动的（不能给用户
+    弹黑窗），它拿到的是一个独立的隐藏控制台。两边都不满足条件，信号必然
+    送不到，结果就是「停止」按钮只能等超时后硬杀，汇总与 profile 清理全被跳过。
+
+    interrupt_main() 在主线程抛 KeyboardInterrupt，与真实 Ctrl+C 走同一条
+    except 分支，因此汇总/清理逻辑一行都不用改。
+    """
+    import _thread
+
+    while True:
+        try:
+            if STOP_FLAG.exists():
+                _RUNTIME['interrupt_requested'] = True
+                ctrl = _RUNTIME.get('controller')
+                if ctrl is not None:
+                    try:
+                        ctrl.log_plain(
+                            "[Signal][WARN] 收到停止请求，写入汇总后清理并退出")
+                    except Exception:
+                        pass
+                try:
+                    STOP_FLAG.unlink()
+                except OSError:
+                    pass
+                _thread.interrupt_main()
+                return
+        except Exception:
+            pass
+        time.sleep(poll_sec)
 
 
 def interrupt_requested():
@@ -758,6 +798,12 @@ def run():
     """
     paths.ensure_dirs()
     atexit.register(_cleanup_browser_profiles_on_exit)
+    # 启动时清掉上一轮遗留的停止标志，否则本次刚起就被判为「已请求停止」
+    try:
+        STOP_FLAG.unlink()
+    except OSError:
+        pass
+    threading.Thread(target=_watch_stop_flag, daemon=True).start()
     # 信号只请求中断，不直接 SystemExit/清浏览器，保证能先写汇总
     for _sig in (getattr(signal, 'SIGINT', None), getattr(signal, 'SIGTERM', None), getattr(signal, 'SIGBREAK', None)):
         if _sig is None:
@@ -983,6 +1029,27 @@ def run():
             _cleanup_browser_profiles_on_exit()
         except Exception:
             pass
+        _hard_exit()
+
+
+def _hard_exit(code=0):
+    """汇总与清理完成后立即结束进程。
+
+    不能走正常退出：ThreadPoolExecutor 注册了 atexit 钩子（_python_exit）
+    join 所有工作线程。shutdown(wait=False, cancel_futures=True) 只能取消
+    未开始的任务，已在跑的线程仍要把当前任务跑完 —— 而它们正阻塞在
+    浏览器导航/验证码等长耗时调用上。实测：汇总写完后进程又挂了 180s+
+    仍未退出，导致 GUI 的「停止」只能等超时硬杀。
+
+    直接 os._exit 安全：日志与结果写入都是单次 open/write/flush/close，
+    没有未落盘的缓冲；profile 清理已在 finally 里做过。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+    os._exit(code)
 
 
 if __name__ == "__main__":

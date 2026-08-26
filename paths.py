@@ -46,6 +46,10 @@ RUN_LOG = LOG_DIR / "web_console_run.log"
 PUSH_STATE_FILE = APP_DIR / ".push_state"
 PROFILES_ROOT = APP_DIR / "browser_profiles"
 UPDATE_DIR = APP_DIR / "update_staging"
+#: 停止请求标志。GUI 创建，worker 轮询到后自行删除并走中断流程。
+#: 用文件而不用信号：worker 由 windowed GUI 以 CREATE_NO_WINDOW 启动，
+#: 两边不共享控制台，CTRL_BREAK_EVENT 根本送不到。
+STOP_FLAG = APP_DIR / ".stop_request"
 
 # ---- 只读资源 ----
 # 冻结时打进 _internal/app_data/，开发时就在项目根

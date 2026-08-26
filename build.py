@@ -62,7 +62,7 @@ def check_env():
     except ImportError:
         sys.exit("[FATAL] 缺少 PyInstaller: pip install pyinstaller")
 
-    for mod in ("faker", "requests", "patchright"):
+    for mod in ("faker", "requests", "patchright", "PySide6"):
         try:
             __import__(mod)
             print(f"{mod}: OK")
@@ -193,28 +193,68 @@ def smoke_test():
         sys.exit(f"[FATAL] 未找到 {exe}")
     try:
         r = subprocess.run([str(exe), "--version"], capture_output=True,
-                           text=True, timeout=120, cwd=str(OUT))
-        print(f"--version -> {r.stdout.strip() or r.stderr.strip()}")
-        if appver.VERSION not in (r.stdout + r.stderr):
-            print("[WARN] --version 输出里没有版本号，请人工确认")
+                           text=True, timeout=180, cwd=str(OUT))
+        out = (r.stdout or "") + (r.stderr or "")
+        print(f"--version -> {out.strip()[:120]}")
+        if appver.VERSION not in out:
+            # console=False 时 stdout 被重定向到 log/gui.out，取不到输出是正常的
+            gui_out = OUT / "log" / "gui.out"
+            if gui_out.is_file() and appver.VERSION in gui_out.read_text(
+                    encoding="utf-8", errors="replace"):
+                print("[ok] 版本号在 log/gui.out 里找到（windowed 模式正常行为）")
+            else:
+                print("[WARN] --version 未看到版本号，请人工确认")
     except subprocess.TimeoutExpired:
         sys.exit("[FATAL] --version 超时（可能缺依赖或 bootloader 异常）")
     except Exception as exc:
         sys.exit(f"[FATAL] 无法执行 exe: {exc}")
 
-    br = OUT / "_internal" / "browsers"
+    internal = OUT / "_internal"
+
+    br = internal / "browsers"
     chromium = [p.name for p in br.iterdir() if p.name.startswith("chromium")] if br.is_dir() else []
     if not chromium:
         sys.exit("[FATAL] _internal/browsers 里没有 chromium，内置浏览器收集失败")
     print(f"[ok] 内置浏览器: {', '.join(chromium)}")
 
-    node = list((OUT / "_internal").rglob("driver/node.exe"))
+    node = list(internal.rglob("driver/node.exe"))
     if not node:
         sys.exit("[FATAL] 未收集到 patchright driver/node.exe，浏览器将无法启动")
     print(f"[ok] patchright driver: {node[0].relative_to(OUT)}")
 
-    # 生成的 config.json / log 是冒烟测试的副产物，不能留在分发包里
-    for junk in ("config.json", "log", "Results", ".write_probe"):
+    # PySide6 核心库：缺一个就是双击无反应
+    for dll in ("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll"):
+        if not list(internal.rglob(dll)):
+            sys.exit(f"[FATAL] 缺少 {dll}，GUI 无法启动")
+    plugins = list(internal.rglob("platforms/qwindows.dll"))
+    if not plugins:
+        sys.exit("[FATAL] 缺少 Qt 平台插件 platforms/qwindows.dll，窗口无法创建")
+    print(f"[ok] Qt 平台插件: {plugins[0].relative_to(OUT)}")
+
+    # GUI 真实启动（offscreen，无需桌面）：能捕捉所有 import 与构造期错误
+    print("-- offscreen 启动测试 --")
+    env = dict(os.environ)
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["OR_SMOKE_EXIT_MS"] = "3000"   # app.py 读到后自行退出
+    try:
+        r = subprocess.run([str(exe)], capture_output=True, text=True,
+                           timeout=180, cwd=str(OUT), env=env)
+        print(f"exit code: {r.returncode}")
+        gui_out = OUT / "log" / "gui.out"
+        log_text = gui_out.read_text(encoding="utf-8", errors="replace") if gui_out.is_file() else ""
+        blob = (r.stdout or "") + (r.stderr or "") + log_text
+        if "Traceback" in blob or "ModuleNotFoundError" in blob:
+            tail = blob[-2500:]
+            sys.exit(f"[FATAL] GUI 启动报错:\n{tail}")
+        if r.returncode not in (0, None):
+            sys.exit(f"[FATAL] GUI 退出码 {r.returncode}\n{blob[-1500:]}")
+        print("[ok] GUI 可正常启动并退出")
+    except subprocess.TimeoutExpired:
+        sys.exit("[FATAL] GUI 启动测试超时（未在预期时间内自行退出）")
+
+    # 清理冒烟测试的副产物，不能留在分发包里
+    for junk in ("config.json", "log", "Results", "browser_profiles",
+                 ".write_probe", ".stop_request"):
         p = OUT / junk
         if p.is_dir():
             shutil.rmtree(p, ignore_errors=True)

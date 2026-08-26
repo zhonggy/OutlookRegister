@@ -1,3 +1,4 @@
 faker
 requests
 patchright
+PySide6

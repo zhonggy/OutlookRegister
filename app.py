@@ -3,38 +3,76 @@
 """OutlookRegister 统一入口（PyInstaller 打包目标）。
 
 模式：
-    (无参数)      启动 Web 控制台并打开浏览器  —— 默认
-    --worker      注册主流程子进程（由控制台拉起）
-    --console     显式启动控制台
-    --version     打印版本
+    OutlookRegister.exe                 启动桌面 GUI  —— 默认
+    OutlookRegister.exe --worker        注册执行进程（由 GUI 拉起）
+    OutlookRegister.exe --version       打印版本
 
-打包后 sys.executable 就是 OutlookRegister.exe，控制台用 --worker 重入自身，
-保持与源码模式相同的进程隔离（注册崩溃不影响控制台，停止=向进程发信号）。
+打包后 sys.executable 就是 OutlookRegister.exe，GUI 用 --worker 重入自身，
+保持进程隔离：注册崩溃不影响界面，停止 = 向进程发信号触发其清理逻辑。
+
+--worker 分支绝不导入 PySide6：注册进程不需要界面，加载一整套 Qt 只是
+白占内存，而且 CREATE_NO_WINDOW 下无窗口环境，Qt 初始化本身可能失败。
 """
 import os
 import sys
 
-# 环境准备必须早于任何 patchright / 业务模块导入
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+
+def _force_utf8_streams() -> None:
+    """标准流切 UTF-8。必须在任何 print 之前执行。
+
+    本项目日志全是中文，而 Windows 上重定向的 stdout 用的是 locale 编码。
+    GUI 拉起 worker 时把输出重定向到 log/web_console_run.log，若系统
+    locale 是 GBK/cp1252，第一条中文 print 就会 UnicodeEncodeError ——
+    worker 直接起不来。
+
+    errors="replace" 而非严格模式：日志里出乱码可以接受，
+    因为写不出日志而停工不可以。
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
+_force_utf8_streams()
 
 import paths  # noqa: E402
 import version as appver  # noqa: E402
 
+# 内置 Chromium 必须在任何 patchright 导入之前声明
 paths.setup_browsers_env()
 
 
-def _bootstrap_data_dir():
+def _bootstrap_data_dir(quiet: bool = False) -> None:
     """首次运行：探测写权限 → 建目录 → 从模板生成 config.json。"""
     ok, detail = paths.check_writable()
     if not ok:
-        print("=" * 60)
-        print("[FATAL] 程序目录不可写，无法保存配置和注册结果。")
-        print(f"        {detail}")
-        print("        请把整个文件夹移到有写权限的位置（如 D:\\OutlookRegister）")
-        print("        后重新运行，不要放在 C:\\Program Files 下。")
-        print("=" * 60)
-        input("按回车退出...")
+        message = (
+            "程序目录不可写，无法保存配置和注册结果。\n\n"
+            f"{detail}\n\n"
+            "请把整个文件夹移到有写权限的位置（如 D:\\OutlookRegister）"
+            "后重新运行，不要放在 C:\\Program Files 下。"
+        )
+        if quiet:
+            # GUI 模式：无控制台可看，必须弹窗
+            try:
+                from PySide6.QtWidgets import QApplication, QMessageBox
+                app = QApplication.instance() or QApplication(sys.argv)
+                QMessageBox.critical(None, "无法启动", message)
+            except Exception:
+                pass
+        else:
+            print("=" * 60)
+            print("[FATAL] " + message)
+            print("=" * 60)
         sys.exit(1)
 
     paths.ensure_dirs()
@@ -42,72 +80,37 @@ def _bootstrap_data_dir():
     if not paths.CONFIG_PATH.exists():
         if paths.CONFIG_EXAMPLE.is_file():
             paths.CONFIG_PATH.write_bytes(paths.CONFIG_EXAMPLE.read_bytes())
-            print(f"[init] 已生成配置文件: {paths.CONFIG_PATH}")
-            print("[init] 请在网页控制台的「系统设置」里填写代理等参数。")
-        else:
+            if not quiet:
+                print(f"[init] 已生成配置文件: {paths.CONFIG_PATH}")
+        elif not quiet:
             print(f"[WARN] 缺少配置模板 {paths.CONFIG_EXAMPLE}，请手动创建 config.json")
 
 
-def _run_worker():
+def _run_worker() -> int:
     import main
     main.run()
+    return 0
 
 
-def _run_console():
-    import webbrowser
-    import threading
-    import web_console
-
-    host, port = "127.0.0.1", 9090
-    argv = sys.argv[2:] if len(sys.argv) > 1 and sys.argv[1] == "--console" else sys.argv[1:]
-    for i, a in enumerate(argv):
-        if a == "--port" and i + 1 < len(argv):
-            try:
-                port = int(argv[i + 1])
-            except ValueError:
-                pass
-
-    web_console.HOST, web_console.PORT = host, port
-
-    print("=" * 60)
-    print(f"  {appver.DISPLAY_NAME}")
-    print("=" * 60)
-    print(f"控制台   : http://{host}:{port}")
-    print(f"数据目录 : {paths.APP_DIR}")
-    print(f"配置文件 : {paths.CONFIG_PATH}")
-    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
-    print(f"浏览器   : {browsers or '使用系统安装的 patchright chromium'}")
-    print()
-    print("仅监听本机 127.0.0.1，其他设备无法访问。首次访问请在网页上创建管理员账号。")
-    print("关闭此窗口即退出程序。")
-    print()
-
-    threading.Timer(1.2, lambda: _open_browser(f"http://{host}:{port}")).start()
-    web_console.main_serve(host, port)
+def _run_gui() -> int:
+    import gui
+    return gui.run(sys.argv)
 
 
-def _open_browser(url):
-    try:
-        import webbrowser
-        webbrowser.open(url)
-    except Exception:
-        pass
+def main() -> int:
+    argv = sys.argv[1:]
 
-
-def main():
-    mode = sys.argv[1] if len(sys.argv) > 1 else "--console"
-
-    if mode in ("--version", "-v"):
+    if argv and argv[0] in ("--version", "-v"):
         print(appver.DISPLAY_NAME)
-        return
+        return 0
 
-    _bootstrap_data_dir()
+    is_worker = "--worker" in argv
+    _bootstrap_data_dir(quiet=not is_worker)
 
-    if mode == "--worker":
-        _run_worker()
-    else:
-        _run_console()
+    if is_worker:
+        return _run_worker()
+    return _run_gui()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -23,6 +23,8 @@ release_notes.md
 update_staging/
 backup_prev/
 .write_probe
+.stop_request
+.shots/
 
 # Local tooling
 _merge_from_monorepo.py
