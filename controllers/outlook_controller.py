@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import random
@@ -117,6 +118,10 @@ class OutlookController:
             'succeeded': 0,
             'failed': 0,
         }
+        self._progress_base_succeeded = 0
+        self._progress_base_failed = 0
+        self._progress_run_started_at = self.runtime_stats['started_at']
+        self._progress_total = 0
 
         self.failure_stats = {
             'ip_cant_open': 0,
@@ -254,10 +259,51 @@ class OutlookController:
     def update_runtime_stats(self, **kwargs):
         with self.runtime_lock:
             self.runtime_stats.update(kwargs)
+        self.publish_progress()
 
     def get_runtime_stats(self):
         with self.runtime_lock:
             return dict(self.runtime_stats)
+
+    def set_progress_target(self, total=None):
+        """整次运行的总任务目标，仅用于进度快照展示。"""
+        with self.runtime_lock:
+            self._progress_total = int(total or 0)
+        self.publish_progress()
+
+    def publish_progress(self):
+        """把累计计数原子写入 progress.json，供 GUI 直接读取。
+
+        GUI 以前靠数日志里的 [REGISTER][FAIL] 行推断失败数，
+        而失败可能记在 OAUTH_NEW/BROWSER 等标签下、或日志尾部被截断，
+        导致「已完成」远小于真实值。这里让 worker 直接公布权威计数。
+        """
+        with self.runtime_lock:
+            snapshot = {
+                'pid': os.getpid(),
+                'updated_at': time.time(),
+                'started_at': (
+                    getattr(self, '_progress_run_started_at', None)
+                    or self.runtime_stats.get('started_at')
+                ),
+                'total': int(getattr(self, '_progress_total', 0) or 0),
+                'submitted': int(self.runtime_stats.get('submitted', 0) or 0),
+                'running': int(self.runtime_stats.get('running', 0) or 0),
+                'succeeded': int(self.runtime_stats.get('succeeded', 0) or 0),
+                'failed': int(self.runtime_stats.get('failed', 0) or 0),
+            }
+        snapshot['completed'] = snapshot['succeeded'] + snapshot['failed']
+        try:
+            target = paths.PROGRESS_FILE
+            tmp = target.with_suffix('.json.tmp')
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(snapshot, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, target)
+        except Exception:
+            # 进度快照是展示用途，写失败不能影响注册主流程
+            pass
 
     def set_progress_base(self, succeeded=0, failed=0, started_at=None):
         """跨批次累计基数：进度条连续，不因换批归零。"""
@@ -268,6 +314,7 @@ class OutlookController:
             self.runtime_stats['succeeded'] = self._progress_base_succeeded
             self.runtime_stats['failed'] = self._progress_base_failed
             self.runtime_stats['started_at'] = self._progress_run_started_at
+        self.publish_progress()
 
     def note_task_finished(self, success, total_tasks):
         """任务结束更新计数；仅成功时立刻打印进度（勿等 clean_up）。
@@ -286,6 +333,8 @@ class OutlookController:
                 or self.runtime_stats.get('started_at')
                 or time.time()
             )
+        # 成功与失败都要公布，否则 GUI 的失败数永远停在 0
+        self.publish_progress()
         if not success:
             return
         current = succeeded + failed

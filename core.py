@@ -38,6 +38,7 @@ OAUTH_FILE = str(paths.OAUTH_FILE)
 RECOVERY_FILE = str(paths.RECOVERY_FILE)
 LOG_DIR = str(paths.LOG_DIR)
 RUN_LOG = str(paths.RUN_LOG)
+PROGRESS_FILE = str(paths.PROGRESS_FILE)
 PUSH_STATE_FILE = str(paths.PUSH_STATE_FILE)
 
 
@@ -172,6 +173,20 @@ def clear_log_and_stats() -> dict:
 
 # ---------------------------------------------------------------- 注册进程
 
+def read_progress_snapshot(pid: Optional[int] = None) -> Optional[dict]:
+    """读 worker 写的 progress.json。pid 不匹配（旧会话残留）则弃用。"""
+    try:
+        with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if pid is not None and data.get("pid") not in (None, pid):
+        return None
+    return data
+
+
 def register_status() -> dict:
     with _runtime["proc_lock"]:
         proc = _runtime["proc"]
@@ -184,11 +199,22 @@ def register_status() -> dict:
         # 未启动会话：进度清零，不显示历史累计
         success = failed = completed = 0
         percent = 0
+        total = task_total
     else:
-        success = max(0, line_count(OAUTH_FILE) - base)
-        failed = run_log_tail().count("[REGISTER][FAIL]")
-        completed = success + failed
-        percent = min(100, int(completed / task_total * 100)) if task_total > 0 else 0
+        # 优先用 worker 公布的权威计数；它与日志里的 [进度]/[Cumulative] 同源。
+        # 回退路径（快照缺失）仍用日志推断，但失败数会偏小。
+        snap = read_progress_snapshot(proc.pid)
+        if snap:
+            success = int(snap.get("succeeded", 0) or 0)
+            failed = int(snap.get("failed", 0) or 0)
+            completed = int(snap.get("completed", success + failed) or 0)
+            total = int(snap.get("total", 0) or 0) or task_total
+        else:
+            success = max(0, line_count(OAUTH_FILE) - base)
+            failed = run_log_tail().count("[REGISTER][FAIL]")
+            completed = success + failed
+            total = task_total
+        percent = min(100, int(completed / total * 100)) if total > 0 else 0
 
     if proc is None:
         state, state_text = "waiting", "等待启动"
@@ -204,7 +230,7 @@ def register_status() -> dict:
     return {
         "state": state,
         "state_text": state_text,
-        "task_total": task_total,
+        "task_total": total,
         "completed": completed,
         "success": success,
         "failed": failed,
@@ -299,6 +325,11 @@ def start_register(tasks: int, concurrent: int) -> dict:
         _runtime["started_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         _runtime["stopping"] = False
         reset_log_cursor()
+        # 丢掉上一次会话的进度快照，避免新会话开头读到旧计数
+        try:
+            paths.PROGRESS_FILE.unlink()
+        except OSError:
+            pass
     return {"ok": True, "detail": "注册已启动"}
 
 def _signal_graceful_stop(proc) -> str:

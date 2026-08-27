@@ -43,6 +43,9 @@ OAUTH_FILE = RESULTS_DIR / "oauth2.txt"
 RECOVERY_FILE = RESULTS_DIR / "recovery_emails.txt"
 LOG_DIR = APP_DIR / "log"
 RUN_LOG = LOG_DIR / "web_console_run.log"
+#: worker 实时进度快照（JSON）。worker 原子写，GUI 只读。
+#: 计数与日志里的 [进度]/[Cumulative] 同源，避免 GUI 用日志文本二次推断。
+PROGRESS_FILE = LOG_DIR / "progress.json"
 PUSH_STATE_FILE = APP_DIR / ".push_state"
 PROFILES_ROOT = APP_DIR / "browser_profiles"
 UPDATE_DIR = APP_DIR / "update_staging"

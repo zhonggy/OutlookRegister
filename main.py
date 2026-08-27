@@ -797,6 +797,11 @@ def run():
     逻辑与改造前一致，仅把原 __main__ 块改成函数体。
     """
     paths.ensure_dirs()
+    # 清掉上一次运行的进度快照，避免 GUI 在新会话开头显示旧计数
+    try:
+        paths.PROGRESS_FILE.unlink()
+    except OSError:
+        pass
     atexit.register(_cleanup_browser_profiles_on_exit)
     # 启动时清掉上一轮遗留的停止标志，否则本次刚起就被判为「已请求停止」
     try:
@@ -866,6 +871,8 @@ def run():
             _RUNTIME['cleaned'] = False
             # 进度基数：累计成功/失败 + 整次起点，保证 [进度] 跨批连续
             selected_controller.set_progress_base(total_succeeded, total_failed, run_started_at)
+            # 总目标写进快照，GUI 的「已完成 x/total」与日志同源
+            selected_controller.set_progress_target(tasks)
             if batch_index == 1:
                 selected_controller.log_plain(f"[Log] 本次日志文件: {selected_controller.log_path}")
                 selected_controller.log_plain(
