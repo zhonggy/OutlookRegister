@@ -63,13 +63,20 @@ class RegisterView(QWidget):
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(8)
 
+        def _lbl(text: str) -> QLabel:
+            # 与系统设置页同规范：110px 右对齐，让输入框左缘垂直成线
+            label = QLabel(text)
+            label.setFixedWidth(110)
+            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            return label
+
         cfg = core.load_config()
         self.sp_tasks = spinbox(1, 100000, int(cfg.get("tasks") or 1))
         self.sp_concurrent = spinbox(1, 64, int(cfg.get("concurrent_flows") or 1), digits=3)
 
-        grid.addWidget(QLabel("注册数量"), 0, 0)
+        grid.addWidget(_lbl("注册数量"), 0, 0)
         grid.addWidget(self.sp_tasks, 0, 1)
-        grid.addWidget(QLabel("并发数"), 0, 2)
+        grid.addWidget(_lbl("并发数"), 0, 2)
         grid.addWidget(self.sp_concurrent, 0, 3)
         grid.setColumnStretch(4, 1)
         grid.addWidget(

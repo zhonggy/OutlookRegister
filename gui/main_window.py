@@ -20,7 +20,7 @@ import core
 import paths
 import version as appver
 
-from .theme import TEXT_DIM, refit_widget_tree, register_state_color
+from .theme import NAV_BG, TEXT_DIM, refit_widget_tree, register_state_color
 from .views import AboutView, DashboardView, RegisterView, SettingsView
 from .widgets import confirm
 
@@ -78,16 +78,26 @@ class MainWindow(QMainWindow):
 
     def _build_sidebar(self) -> QWidget:
         host = QWidget()
-        host.setFixedWidth(170)
-        host.setStyleSheet("background: #1f2733;")
+        host.setFixedWidth(190)
+        host.setStyleSheet(f"background: {NAV_BG};")
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        brand = QLabel("OutlookRegister")
+        # Logo 行：品牌名 + 版本胶囊标签。固定行高避免胶囊被拉伸
+        brand_row = QWidget()
+        brand_row.setStyleSheet(f"background: {NAV_BG};")
+        brand_layout = QHBoxLayout(brand_row)
+        brand_layout.setContentsMargins(18, 16, 12, 4)
+        brand_layout.setSpacing(8)
+        brand = QLabel("\u26a1 OutlookReg")
         brand.setProperty("role", "brand")
-        sub = QLabel(f"v{appver.VERSION}")
-        sub.setProperty("role", "brand-sub")
+        pill = QLabel(f"v{appver.VERSION}")
+        pill.setProperty("role", "version-pill")
+        pill.setAlignment(Qt.AlignCenter)
+        brand_layout.addWidget(brand)
+        brand_layout.addStretch(1)
+        brand_layout.addWidget(pill)
 
         self.nav = QListWidget()
         self.nav.setProperty("role", "nav")
@@ -95,8 +105,7 @@ class MainWindow(QMainWindow):
         self.nav.addItems(["仪表盘", "启动注册", "系统设置", "关于与更新"])
         self.nav.currentRowChanged.connect(self._on_nav_changed)
 
-        layout.addWidget(brand)
-        layout.addWidget(sub)
+        layout.addWidget(brand_row)
         layout.addWidget(self.nav, 1)
         return host
 

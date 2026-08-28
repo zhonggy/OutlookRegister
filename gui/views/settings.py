@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QGroupBox,
+    QLabel,
     QLineEdit,
     QScrollArea,
     QVBoxLayout,
@@ -29,6 +30,19 @@ from ..widgets import (
     title_label,
     toolbar,
 )
+
+#: 表单标签固定宽度（px）。所有标签右对齐后，输入框左缘形成垂直直线，
+#: 不再因标签长短不一直接导致“锯齿状”错位。最长标签 ≈8 个全角字符可容纳
+FORM_LABEL_WIDTH = 110
+
+
+def _lbl(text: str):
+    """固定宽度、右对齐的表单标签。空串占位用于让无标签行（勾选框等）
+    的控件也对齐到同一竖线。"""
+    label = QLabel(text)
+    label.setFixedWidth(FORM_LABEL_WIDTH)
+    label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    return label
 
 
 def _combo(options, current) -> QComboBox:
@@ -50,7 +64,7 @@ def _form(box: QGroupBox) -> QFormLayout:
     form = QFormLayout(box)
     form.setRowWrapPolicy(QFormLayout.WrapLongRows)
     form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-    form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
     form.setHorizontalSpacing(10)
     form.setVerticalSpacing(8)
     return form
@@ -143,13 +157,13 @@ class SettingsView(QWidget):
              (2, "2 — 验证码后交人工，不跑 OAuth")], 0)
         self.f_batch = spinbox(1, 100000, 300)
 
-        form.addRow("邮箱后缀", self.f_suffix)
-        form.addRow("", self.f_headless)
-        form.addRow("填表节奏基准（秒）", self.f_wait)
-        form.addRow("页面打开超时（秒）", self.f_page_timeout)
-        form.addRow("验证码额外重试", self.f_captcha_retry)
-        form.addRow("验证码策略", self.f_captcha_strategy)
-        form.addRow("单批成功上限", self.f_batch)
+        form.addRow(_lbl("邮箱后缀"), self.f_suffix)
+        form.addRow(_lbl(""), self.f_headless)
+        form.addRow(_lbl("填表节奏基准(秒)"), self.f_wait)
+        form.addRow(_lbl("页面打开超时（秒）"), self.f_page_timeout)
+        form.addRow(_lbl("验证码额外重试"), self.f_captcha_retry)
+        form.addRow(_lbl("验证码策略"), self.f_captcha_strategy)
+        form.addRow(_lbl("单批成功上限"), self.f_batch)
         form.addRow(hint_label(
             "有头模式在 Linux 上需要 xvfb；Windows 桌面环境可直接使用。"))
         return box
@@ -171,14 +185,14 @@ class SettingsView(QWidget):
         self.btn_check_proxy.clicked.connect(self._on_check_proxy)
         self.proxy_status = StatusLine()
 
-        form.addRow("模式", self.f_proxy_mode)
-        form.addRow("协议", self.f_proxy_type)
-        form.addRow("主机", self.f_proxy_host)
-        form.addRow("单端口", self.f_single_port)
-        form.addRow("起始端口", self.f_port_start)
-        form.addRow("结束端口", self.f_port_end)
-        form.addRow("每端口最多选中", self.f_max_per)
-        form.addRow("", self.btn_check_proxy)
+        form.addRow(_lbl("模式"), self.f_proxy_mode)
+        form.addRow(_lbl("协议"), self.f_proxy_type)
+        form.addRow(_lbl("主机"), self.f_proxy_host)
+        form.addRow(_lbl("单端口"), self.f_single_port)
+        form.addRow(_lbl("起始端口"), self.f_port_start)
+        form.addRow(_lbl("结束端口"), self.f_port_end)
+        form.addRow(_lbl("每端口最多选中"), self.f_max_per)
+        form.addRow(_lbl(""), self.btn_check_proxy)
         form.addRow(self.proxy_status)
         return box
 
@@ -191,10 +205,10 @@ class SettingsView(QWidget):
         self.f_redirect = QLineEdit()
         self.f_scopes = QLineEdit()
 
-        form.addRow("", self.f_oauth_enabled)
-        form.addRow("Client ID", self.f_client_id)
-        form.addRow("Redirect URL", self.f_redirect)
-        form.addRow("Scopes（逗号分隔）", self.f_scopes)
+        form.addRow(_lbl(""), self.f_oauth_enabled)
+        form.addRow(_lbl("Client ID"), self.f_client_id)
+        form.addRow(_lbl("Redirect URL"), self.f_redirect)
+        form.addRow(_lbl("Scopes（逗号分隔）"), self.f_scopes)
         form.addRow(hint_label("关闭时注册成功即计成功，不再拉取 token。"))
         return box
 
@@ -211,10 +225,10 @@ class SettingsView(QWidget):
         self.f_browser_exe = QLineEdit()
         self.f_browser_exe.setPlaceholderText("留空 = 用内置 Chromium")
 
-        form.addRow("", self.f_fp_enabled)
-        form.addRow("指纹平台", self.f_fp_platform)
-        form.addRow("指纹品牌", self.f_fp_brand)
-        form.addRow("自定义内核路径", self.f_browser_exe)
+        form.addRow(_lbl(""), self.f_fp_enabled)
+        form.addRow(_lbl("指纹平台"), self.f_fp_platform)
+        form.addRow(_lbl("指纹品牌"), self.f_fp_brand)
+        form.addRow(_lbl("自定义内核路径"), self.f_browser_exe)
         form.addRow(hint_label(
             "指纹伪装改写 Canvas/WebGL/UA 等特征，降低自动化识别。<br>"
             "自定义内核可指向 fingerprint-chromium 的 chrome.exe。"))
@@ -236,15 +250,15 @@ class SettingsView(QWidget):
         self.f_tm_timeout = spinbox(10, 900, 120, digits=4)
         self.f_tm_poll = spinbox(1, 60, 3, digits=3)
 
-        form.addRow("", self.f_tm_enabled)
-        form.addRow("类型", self.f_tm_type)
-        form.addRow("API 地址", self.f_tm_url)
-        form.addRow("管理员邮箱", self.f_tm_admin)
-        form.addRow("管理员密码", self.f_tm_pass)
-        form.addRow("域名", self.f_tm_domain)
-        form.addRow("本地部分前缀", self.f_tm_prefix)
-        form.addRow("验证码超时（秒）", self.f_tm_timeout)
-        form.addRow("轮询间隔（秒）", self.f_tm_poll)
+        form.addRow(_lbl(""), self.f_tm_enabled)
+        form.addRow(_lbl("类型"), self.f_tm_type)
+        form.addRow(_lbl("API 地址"), self.f_tm_url)
+        form.addRow(_lbl("管理员邮箱"), self.f_tm_admin)
+        form.addRow(_lbl("管理员密码"), self.f_tm_pass)
+        form.addRow(_lbl("域名"), self.f_tm_domain)
+        form.addRow(_lbl("本地部分前缀"), self.f_tm_prefix)
+        form.addRow(_lbl("验证码超时（秒）"), self.f_tm_timeout)
+        form.addRow(_lbl("轮询间隔（秒）"), self.f_tm_poll)
         form.addRow(hint_label(
             "仅在微软弹出「让我们来保护你的帐户」时使用。关闭则走跳过逻辑。"))
         return box
@@ -261,10 +275,10 @@ class SettingsView(QWidget):
         self.btn_test_resin.clicked.connect(self._on_test_resin)
         self.resin_status = StatusLine()
 
-        form.addRow("", self.f_resin_enabled)
-        form.addRow("URL（含 Token）", self.f_resin_url)
-        form.addRow("Platform", self.f_resin_platform)
-        form.addRow("", self.btn_test_resin)
+        form.addRow(_lbl(""), self.f_resin_enabled)
+        form.addRow(_lbl("URL（含 Token）"), self.f_resin_url)
+        form.addRow(_lbl("Platform"), self.f_resin_platform)
+        form.addRow(_lbl(""), self.btn_test_resin)
         form.addRow(self.resin_status)
         form.addRow(hint_label(
             "启用后浏览器与 OAuth 都走 Resin 粘性 IP，Account 取邮箱前缀。"))
@@ -286,10 +300,10 @@ class SettingsView(QWidget):
         self.btn_push_om.clicked.connect(self._on_push_manager)
         self.om_status = StatusLine()
 
-        form.addRow("", self.f_om_enabled)
-        form.addRow("API 地址", self.f_om_url)
-        form.addRow("API Key", self.f_om_key)
-        form.addRow("", toolbar(self.btn_test_om, self.btn_push_om))
+        form.addRow(_lbl(""), self.f_om_enabled)
+        form.addRow(_lbl("API 地址"), self.f_om_url)
+        form.addRow(_lbl("API Key"), self.f_om_key)
+        form.addRow(_lbl(""), toolbar(self.btn_test_om, self.btn_push_om))
         form.addRow(self.om_status)
         return box
 
@@ -309,13 +323,13 @@ class SettingsView(QWidget):
         self.f_pp_config = QLineEdit()
         self.f_pp_port = spinbox(0, 65535, 9091, digits=5)
 
-        form.addRow("", self.f_upd_use_proxy)
-        form.addRow("更新专用代理", self.f_upd_proxy)
-        form.addRow("GitHub Token", self.f_upd_token)
-        form.addRow("", self.f_pp_enabled)
-        form.addRow("代理池程序", self.f_pp_exe)
-        form.addRow("代理池配置", self.f_pp_config)
-        form.addRow("代理池管理端口", self.f_pp_port)
+        form.addRow(_lbl(""), self.f_upd_use_proxy)
+        form.addRow(_lbl("更新专用代理"), self.f_upd_proxy)
+        form.addRow(_lbl("GitHub Token"), self.f_upd_token)
+        form.addRow(_lbl(""), self.f_pp_enabled)
+        form.addRow(_lbl("代理池程序"), self.f_pp_exe)
+        form.addRow(_lbl("代理池配置"), self.f_pp_config)
+        form.addRow(_lbl("代理池管理端口"), self.f_pp_port)
         form.addRow(hint_label(
             "GitHub API 在部分网络下不通，可指定代理。<br>"
             "代理池由外部程序提供，仅在源码模式的一键启动脚本中使用。"))

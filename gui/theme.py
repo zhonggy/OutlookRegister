@@ -13,11 +13,15 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtCore import QEvent, QObject, QPropertyAnimation
+from PySide6.QtGui import QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
     QComboBox,
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QGroupBox,
     QLabel,
     QLineEdit,
     QSizePolicy,
@@ -40,32 +44,46 @@ COLOR_RUNNING = "#0a6e8a"   # 青蓝：进行中
                             # 否则"运行中"文字和可点按钮同色，用户分不清
 COLOR_IDLE = "#5f6b78"      # 灰：未开始
 
-BG = "#f5f6f8"              # 窗口底：微灰，避免纯白刺眼
+BG = "#f8fafc"              # 主区域背景：柔和浅灰（slate-50）
 BG_ALT = "#ffffff"          # 卡片/输入框：纯白，浮在灰底上形成层次
-BG_HOVER = "#eef1f5"
-BG_SUNKEN = "#eceff3"       # 日志区等内嵌区域
+BG_HOVER = "#f1f5f9"        # slate-100
+BG_SUNKEN = "#e2e8f0"       # 日志区等内嵌区域（slate-200）
 
-BORDER = "#d8dde4"
-BORDER_STRONG = "#b6bec9"
+BORDER = "#e2e8f0"          # 卡片描边（slate-200）
+BORDER_STRONG = "#cbd5e1"   # 输入框描边（slate-300）
 
-TEXT = "#1f2430"
-TEXT_DIM = "#6b7280"
-TEXT_FAINT = "#98a1ad"
+TEXT = "#0f172a"            # slate-900
+TEXT_DIM = "#64748b"        # slate-500
+TEXT_FAINT = "#94a3b8"      # slate-400
 
-ACCENT = "#0067c0"
-ACCENT_HOVER = "#0a5aa8"
-ACCENT_PRESSED = "#084c8d"
-ACCENT_SOFT = "#e8f1fb"
+ACCENT = "#2563eb"          # 科技蓝（blue-600）
+ACCENT_HOVER = "#1d4ed8"    # blue-700
+ACCENT_PRESSED = "#1e40af"  # blue-800
+ACCENT_SOFT = "#dbeafe"     # blue-100
+ACCENT_TINT = "#eff6ff"     # blue-50：outline 按钮悬停底色
 
 DANGER = "#c62828"
 DANGER_HOVER = "#ad1f1f"
 DANGER_SOFT = "#fdeaea"
 
-NAV_BG = "#1f2733"          # 侧栏深色，与内容区形成主次
-NAV_TEXT = "#c8d0da"
+NAV_BG = "#0f172a"          # 侧栏深蓝黑（slate-900），与内容区形成主次
+NAV_TEXT = "#94a3b8"
 NAV_TEXT_ACTIVE = "#ffffff"
-NAV_ACTIVE_BG = "#2d6cb5"
-NAV_HOVER_BG = "#2a3542"
+NAV_ACTIVE_BG = "#2563eb"
+NAV_HOVER_BG = "#1e293b"    # slate-800
+
+#: 卡片投影。QSS 不支持 box-shadow，用 QGraphicsDropShadowEffect 模拟
+#: CSS `0 4px 6px -1px rgba(0,0,0,0.05)` 的效果（略加强以在白底可见）
+CARD_SHADOW_BLUR = 14
+CARD_SHADOW_OFFSET = (0, 3)
+CARD_SHADOW_COLOR = QColor(15, 23, 42, 32)   # slate-900 @ ~12% alpha
+
+#: 聚焦呼吸灯（Focus Ring）。QSS 无法发光，对获得焦点的输入控件
+#: 挂一个动态模糊半径的蓝色投影，blur 4↔13px 循环，形成“呼吸”节奏
+FOCUS_GLOW_COLOR = QColor(37, 99, 235, 85)   # blue-600
+FOCUS_GLOW_MIN = 4.0
+FOCUS_GLOW_MAX = 13.0
+FOCUS_GLOW_PERIOD_MS = 1500
 
 ROW_ALT = "#fafbfc"
 HEADER_BG = "#f0f2f5"
@@ -165,6 +183,92 @@ def enable_wrap_growth(label: QLabel) -> None:
     label.setSizePolicy(policy)
 
 
+def apply_card_shadow(widget: QWidget) -> None:
+    """给卡片/分组框挂投影，模拟 CSS box-shadow。
+
+    只对未挂过 effect 的控件生效，重复调用（例如 refit 被多处触发）不会叠层。
+    """
+    if widget.graphicsEffect() is not None:
+        return
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(CARD_SHADOW_BLUR)
+    effect.setOffset(*CARD_SHADOW_OFFSET)
+    effect.setColor(CARD_SHADOW_COLOR)
+    widget.setGraphicsEffect(effect)
+
+
+class _FocusGlowFilter(QObject):
+    """全局事件过滤器：输入控件获得焦点时挂蓝色呼吸灯投影。
+
+    - QSS 只能改 border 颜色，发不了光；这里用 QGraphicsDropShadowEffect
+      的动态 blurRadius 模拟 Focus Ring 呼吸效果
+    - QSpinBox / 可编辑 QComboBox 内部的 QLineEdit 会收到 FocusIn，
+      对内层编辑器挂光会被外框裁掉，需排除
+    - FocusOut 时 setGraphicsEffect(None) 会连动画一起销毁，不需手动 stop
+    """
+
+    #: 参与呼吸灯的控件。QPlainTextEdit/QTextEdit 刻意不参与：日志区每追加
+    #: 一行都触发重绘，挂上 effect 后每行都要过一遍 pixmap 重渲染，长跑时
+    #: 纯属浪费。文本域用 QSS 的 border 变色作聚焦反馈。
+    _GLOW_TYPES = (QLineEdit, QComboBox, QAbstractSpinBox)
+
+    def __init__(self, parent: QObject = None):
+        super().__init__(parent)
+        self._current = None
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        et = event.type()
+        if et == QEvent.Type.FocusIn:
+            if isinstance(obj, self._GLOW_TYPES):
+                inner = obj.parentWidget()
+                if not isinstance(inner, (QAbstractSpinBox, QComboBox)):
+                    self._attach(obj)
+        elif et == QEvent.Type.FocusOut and obj is self._current:
+            self._detach(obj)
+        return False
+
+    def _attach(self, widget: QWidget) -> None:
+        self._detach(self._current)
+        try:
+            glow = QGraphicsDropShadowEffect(widget)
+            glow.setBlurRadius(FOCUS_GLOW_MIN)
+            glow.setOffset(0, 0)
+            glow.setColor(FOCUS_GLOW_COLOR)
+            widget.setGraphicsEffect(glow)
+
+            anim = QPropertyAnimation(glow, b"blurRadius", glow)
+            anim.setStartValue(FOCUS_GLOW_MIN)
+            anim.setKeyValueAt(0.5, FOCUS_GLOW_MAX)
+            anim.setEndValue(FOCUS_GLOW_MIN)
+            anim.setDuration(FOCUS_GLOW_PERIOD_MS)
+            anim.setLoopCount(-1)
+            anim.start()
+        except RuntimeError:
+            # 控件正在销毁，放弃本次挂光
+            return
+        self._current = widget
+
+    def _detach(self, widget) -> None:
+        self._current = None
+        if widget is None:
+            return
+        try:
+            widget.setGraphicsEffect(None)
+        except RuntimeError:
+            # 控件已销毁，effect 作为子对象随之销毁，无需处理
+            pass
+
+
+_focus_glow_filter: Optional[_FocusGlowFilter] = None
+
+
+def install_focus_glow(app: QApplication) -> None:
+    global _focus_glow_filter
+    if _focus_glow_filter is None:
+        _focus_glow_filter = _FocusGlowFilter(app)
+        app.installEventFilter(_focus_glow_filter)
+
+
 def refit_widget_tree(root: QWidget) -> None:
     """样式表应用后重算整棵树的度量。
 
@@ -200,6 +304,13 @@ def refit_widget_tree(root: QWidget) -> None:
     for editor in root.findChildren(QComboBox):
         editor.setMinimumHeight(INPUT_MIN_HEIGHT)
 
+    # 卡片投影：分组框与 role=card 的 QFrame。深色侧栏里的导航列表不需要
+    for box in root.findChildren(QGroupBox):
+        apply_card_shadow(box)
+    for frame in root.findChildren(QFrame):
+        if frame.property("role") == "card":
+            apply_card_shadow(frame)
+
 
 # ---------------------------------------------------------------- 样式表
 
@@ -220,12 +331,13 @@ QListWidget[role="nav"] {{
     outline: none;
     padding: 8px 0;
 }}
+/* 全圆角胶囊选中态：item 高约 38px，radius 16px 接近满圆 */
 QListWidget[role="nav"]::item {{
     color: {NAV_TEXT};
-    padding: 11px 18px;
+    padding: 10px 16px;
     border: none;
-    margin: 1px 6px;
-    border-radius: 6px;
+    margin: 2px 10px;
+    border-radius: 16px;
 }}
 QListWidget[role="nav"]::item:hover {{
     background: {NAV_HOVER_BG};
@@ -234,20 +346,23 @@ QListWidget[role="nav"]::item:hover {{
 QListWidget[role="nav"]::item:selected {{
     background: {NAV_ACTIVE_BG};
     color: {NAV_TEXT_ACTIVE};
+    font-weight: 600;
 }}
 
 QLabel[role="brand"] {{
     color: {NAV_TEXT_ACTIVE};
-    background: {NAV_BG};
+    background: transparent;
     font-size: 16px;
     font-weight: 600;
-    padding: 16px 18px 4px 18px;
 }}
-QLabel[role="brand-sub"] {{
-    color: {TEXT_FAINT};
-    background: {NAV_BG};
-    font-size: 11px;
-    padding: 0 18px 12px 18px;
+QLabel[role="version-pill"] {{
+    color: #93c5fd;
+    background: rgba(37, 99, 235, 0.18);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    border-radius: 9px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 8px;
 }}
 
 /* ---------- 文本层级 ---------- */
@@ -261,14 +376,14 @@ QLabel[role="mono"] {{ font-family: {MONO_FAMILY}; }}
 QFrame[role="card"] {{
     background: {BG_ALT};
     border: 1px solid {BORDER};
-    border-radius: 8px;
+    border-radius: 10px;
 }}
 QFrame[role="separator"] {{ background: {BORDER}; border: none; }}
 
 QGroupBox {{
     background: {BG_ALT};
     border: 1px solid {BORDER};
-    border-radius: 8px;
+    border-radius: 10px;
     margin-top: 10px;
     padding: 14px 14px 12px 14px;
     font-weight: 600;
@@ -283,16 +398,21 @@ QGroupBox::title {{
 }}
 
 /* ---------- 按钮 ---------- */
+/* 默认按钮 = Outline 描边样式；主行动给 role=primary 实心蓝 */
 QPushButton {{
     background: {BG_ALT};
-    color: {TEXT};
+    color: #334155;
     border: 1px solid {BORDER_STRONG};
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 7px 16px;
     min-height: 20px;
 }}
-QPushButton:hover {{ background: {BG_HOVER}; border-color: {ACCENT}; }}
-QPushButton:pressed {{ background: {BG_SUNKEN}; }}
+QPushButton:hover {{
+    background: {ACCENT_TINT};
+    border-color: {ACCENT};
+    color: {ACCENT};
+}}
+QPushButton:pressed {{ background: {ACCENT_SOFT}; color: {ACCENT}; }}
 QPushButton:disabled {{
     background: {DISABLED_BG};
     color: {DISABLED_TEXT};
@@ -326,15 +446,13 @@ QPushButton[role="danger"]:disabled {{
     border-color: {BORDER};
 }}
 
-/* ---------- 输入控件 ---------- */
-/* min-height 必须显式给：一旦样式表里写了 padding，Qt 不再用原生
-   sizeHint，而是按内容算 —— 结果 QSpinBox 被挤到 19px（内部编辑器只
-   剩 5px），数字直接看不见。20px 内容区 + 12px padding + 2px 边框 = 34px。*/
+/* ---------- 输入控件 ----------
+   文本框 / 数字框 / 下拉框统一形态：同底色、同描边、同圆角、同内边距。 */
 QLineEdit, QSpinBox, QComboBox {{
     background: {BG_ALT};
     color: {TEXT};
     border: 1px solid {BORDER_STRONG};
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 6px 9px;
     min-height: 20px;
     selection-background-color: {ACCENT};
@@ -344,7 +462,7 @@ QPlainTextEdit, QTextEdit {{
     background: {BG_ALT};
     color: {TEXT};
     border: 1px solid {BORDER_STRONG};
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 6px 9px;
     selection-background-color: {ACCENT};
     selection-color: #ffffff;
@@ -426,12 +544,12 @@ QTableCornerButton::section {{ background: {HEADER_BG}; border: none; }}
 QProgressBar {{
     background: {BG_SUNKEN};
     border: 1px solid {BORDER};
-    border-radius: 6px;
+    border-radius: 8px;
     height: 20px;
     text-align: center;
     color: {TEXT};
 }}
-QProgressBar::chunk {{ background: {ACCENT}; border-radius: 5px; }}
+QProgressBar::chunk {{ background: {ACCENT}; border-radius: 7px; }}
 
 /* ---------- 日志区 ---------- */
 QPlainTextEdit[role="log"] {{
@@ -488,3 +606,5 @@ def apply_theme(app: QApplication) -> None:
     font.setPixelSize(13)
     app.setFont(font)
     app.setStyleSheet(_STYLESHEET)
+    # 聚焦呼吸灯：必须在全局样式表之后装，让 border 变色与光晕叠加生效
+    install_focus_glow(app)
