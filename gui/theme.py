@@ -160,13 +160,16 @@ def metric_height(widget: Optional[QWidget] = None) -> int:
 
 
 def fit_spinbox(widget: QWidget, digits: int = 6) -> None:
-    """按位数给数字输入框留够宽度，避免数字被上下箭头遮住。"""
+    """按位数给数字输入框留够宽度。
+
+    右侧上下箭头已经去掉了，所以只留文字内边距的余量。
+    """
     try:
         metrics = QFontMetrics(widget.font())
         char_w = metrics.horizontalAdvance("8")
-        widget.setMinimumWidth(char_w * digits + 44)
+        widget.setMinimumWidth(char_w * digits + 24)
     except Exception:
-        widget.setMinimumWidth(110)
+        widget.setMinimumWidth(90)
     widget.setMinimumHeight(INPUT_MIN_HEIGHT)
 
 
@@ -477,14 +480,15 @@ QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {{
 }}
 QLineEdit[role="mono"] {{ font-family: {MONO_FAMILY}; }}
 
-QSpinBox::up-button, QSpinBox::down-button {{
-    width: 18px;
-    background: {BG_HOVER};
-    border-left: 1px solid {BORDER};
+/* 数字框不要右侧的上下加减按钮，外观和普通文本框一致 */
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+    width: 0;
+    height: 0;
+    border: none;
+    background: transparent;
+    subcontrol-position: right;
 }}
-QSpinBox::up-button {{ subcontrol-position: top right; height: 50%; }}
-QSpinBox::down-button {{ subcontrol-position: bottom right; height: 50%; }}
-QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background: {ACCENT_SOFT}; }}
 
 QComboBox::drop-down {{
     width: 22px;

@@ -104,8 +104,42 @@ def button(text: str, role: str = "") -> QPushButton:
     return btn
 
 
+class PlainSpinBox(QSpinBox):
+    """纯手输的数字框：没有箭头按钮，滚轮和上下键也不改值。
+
+    只留键盘直接输入这一条改值路径 —— 滚轮误触和方向键误碰都不会
+    偷偷改掉参数。范围校验还是交给 QSpinBox 自己做。
+    """
+
+    _BLOCKED_KEYS = (
+        Qt.Key_Up,
+        Qt.Key_Down,
+        Qt.Key_PageUp,
+        Qt.Key_PageDown,
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setButtonSymbols(QSpinBox.NoButtons)
+        # 默认是 WheelFocus：鼠标滚轮经过就能抢焦点，改成 StrongFocus
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        event.ignore()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        if event.key() in self._BLOCKED_KEYS:
+            event.ignore()
+            return
+        super().keyPressEvent(event)
+
+    def stepBy(self, steps: int) -> None:  # noqa: N802 - Qt 命名
+        # stepUp()/stepDown() 以及其它内部步进入口一并封掉
+        return
+
+
 def spinbox(minimum: int, maximum: int, value: int, digits: int = 6) -> QSpinBox:
-    box = QSpinBox()
+    box = PlainSpinBox()
     box.setRange(minimum, maximum)
     box.setValue(value)
     fit_spinbox(box, digits)
