@@ -318,8 +318,10 @@ def refit_widget_tree(root: QWidget) -> None:
 # ---------------------------------------------------------------- 样式表
 
 _STYLESHEET = f"""
+/* 默认透明底：普通容器和标签不自己填色，直接透出父级 —— 灰页面或白卡片。
+   之前这里给所有 QWidget 填 BG 灰，白卡片上的标签/工具条会盖出灰色横条纹 */
 QWidget {{
-    background: {BG};
+    background: transparent;
     color: {TEXT};
     font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
     font-size: 13px;
