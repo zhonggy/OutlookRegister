@@ -90,7 +90,7 @@ class MainWindow(QMainWindow):
         brand_layout = QHBoxLayout(brand_row)
         brand_layout.setContentsMargins(18, 16, 12, 4)
         brand_layout.setSpacing(8)
-        brand = QLabel("\u26a1 OutlookReg")
+        brand = QLabel("\u26a1 微软注册机")
         brand.setProperty("role", "brand")
         pill = QLabel(f"v{appver.VERSION}")
         pill.setProperty("role", "version-pill")
