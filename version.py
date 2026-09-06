@@ -1,6 +1,6 @@
 """版本与更新元信息。发版时手动递增 VERSION。"""
 
-VERSION = "1.7"
+VERSION = "1.8"
 
 GITHUB_OWNER = "zhonggy"
 GITHUB_REPO = "OutlookRegister"
