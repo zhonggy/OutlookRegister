@@ -73,6 +73,19 @@ class OutlookController:
         # 注册后 / OAuth 中任一处弹出「保护帐户」页则绑定；未弹出则直接继续
         self.temp_mail_cfg = config_data.get('temp_mail', {}) or {}
         self.bind_recovery_email = bool(self.temp_mail_cfg.get('enabled', True))
+        # 强制绑定策略（默认开）：保护帐户页出现后不轻易「暂时跳过」
+        #   force_bind      =True 时绑定失败会重试 bind_retries 轮，全部失败才兜底跳过
+        #   bind_retries     每轮绑定用全新临时邮箱地址（第2轮起不固定名字，规避同名冲突）
+        #   protect_wait_sec 注册后等待保护帐户页出现的探针时长（秒）
+        self.recovery_force_bind = bool(self.temp_mail_cfg.get('force_bind', True))
+        try:
+            self.recovery_bind_retries = max(1, int(self.temp_mail_cfg.get('bind_retries', 3) or 3))
+        except Exception:
+            self.recovery_bind_retries = 3
+        try:
+            self.recovery_protect_wait = max(3.0, float(self.temp_mail_cfg.get('protect_wait_sec', 15) or 15))
+        except Exception:
+            self.recovery_protect_wait = 15.0
 
         # Resin 外部粘性代理池：resin.url 如 http://127.0.0.1:2260/my-token
         resin_cfg = config_data.get('resin', {}) or {}
@@ -1024,16 +1037,47 @@ class OutlookController:
         except Exception:
             return False
 
+    def _dump_page_debug(self, page, tag):
+        """绑定失败时留证：截图 + 正文前 600 字，便于判断卡在哪个页面。"""
+        try:
+            d = os.path.join(self.log_dir, 'debug')
+            os.makedirs(d, exist_ok=True)
+            fn = os.path.join(d, f"{tag}_{int(time.time())}.png")
+            try:
+                page.screenshot(path=fn, timeout=5000)
+                self.log_event('REGISTER', 'WARN', 'recovery_dump', f'已保存调试截图 {fn}')
+            except Exception:
+                pass
+            try:
+                body = (page.locator('body').inner_text(timeout=1000) or '')[:600].replace('\n', ' | ')
+                self.log_event('REGISTER', 'WARN', 'recovery_dump', f'页面正文: {body}')
+            except Exception:
+                pass
+            try:
+                self.log_event('REGISTER', 'WARN', 'recovery_dump', f'当前URL: {page.url}')
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _try_bind_recovery_email(self, page):
-        """保护帐户页：创建临时邮箱 → 填 #EmailAddress → 接码 → #iOttText。失败则调用方再 skip。"""
+        """保护帐户页：创建临时邮箱 → 填 #EmailAddress → 接码 → #iOttText。
+
+        force_bind（默认开启）时失败不跳过：重试 recovery_bind_retries 轮，
+        每轮换全新临时邮箱地址（第 2 轮起不固定名字，规避服务端同名冲突）。
+        仅当还能重新提交邮箱地址（停在邮箱输入页）时才值得重试；
+        已卡在验证码页时换地址无意义，直接交还调用方处理。
+        全部失败返回 False，由调用方决定是否兜底 #iShowSkip。
+        """
         if not self.bind_recovery_email:
             return False
         try:
-            from controllers.recovery_bind import bind_recovery_email, is_protect_account_page, is_ott_code_page
+            from controllers.recovery_bind import (
+                bind_recovery_email, is_protect_account_page, is_ott_code_page,
+                wait_for_protect_page,
+            )
         except Exception as exc:
             self.log_event('REGISTER', 'WARN', 'recovery', f'加载 recovery_bind 失败: {exc}')
-            return False
-        if not is_protect_account_page(page) and not is_ott_code_page(page):
             return False
 
         def _log(stage, message, level='INFO'):
@@ -1042,35 +1086,78 @@ class OutlookController:
         # 辅助邮箱前缀与 Outlook 账号保持一致（grtbyazdfncld@outlook.com → grtbyazdfncld@1313223.cyou）
         reg_email = getattr(self.thread_local, '_reg_email', '')
         reg_name = reg_email.split('@')[0] if reg_email and '@' in reg_email else None
-        result = bind_recovery_email(page, self.temp_mail_cfg, log=_log, name=reg_name)
-        # 兼容 (ok, session) 或旧版 bool
-        if isinstance(result, tuple):
-            ok, session = result[0], (result[1] if len(result) > 1 else None)
-        else:
-            ok, session = bool(result), None
-        if ok:
-            self.thread_local.recovery_email_bound = True
-            self.thread_local.recovery_email_skipped = False
-            if session:
-                self.thread_local.recovery_mail_session = session
-                self.log_event(
-                    'REGISTER', 'INFO', 'recovery_session',
-                    f"已保存辅助邮箱会话 addr={session.get('address')}",
-                )
-            # 保存 账号→辅助邮箱 绑定记录到 Results/recovery_emails.txt
+
+        rounds = self.recovery_bind_retries if self.recovery_force_bind else 1
+        for attempt in range(1, rounds + 1):
+            # 每轮先确认页面状态：邮箱输入页才值得重试
             try:
-                from controllers.recovery_bind import save_recovery_record
-                save_recovery_record(
-                    getattr(self.thread_local, '_reg_email', ''),
-                    getattr(self.thread_local, '_reg_password', ''),
-                    (session or {}).get('address', ''),
-                    log=_log,
+                on_email_page = is_protect_account_page(page)
+                on_code_page = is_ott_code_page(page)
+            except Exception:
+                on_email_page, on_code_page = True, False
+            if not on_email_page and not on_code_page:
+                # 严格判定没认出（页面可能还在渲染）：调用方已从 #iShowSkip 推断是保护页，再宽等一会
+                _log('recovery', f'第{attempt}轮：未识别到邮箱/验证码框，宽等保护帐户页渲染', 'INFO')
+                try:
+                    appeared = wait_for_protect_page(page, timeout_sec=10.0, log=_log)
+                except Exception:
+                    appeared = False
+                if not appeared:
+                    _log('recovery', '宽等后仍不是保护帐户页，停止重试', 'WARN')
+                    return False
+                on_email_page = True
+            if on_code_page and not on_email_page:
+                _log('recovery', '已在验证码页且无邮箱框，换地址重试无意义，交还调用方', 'WARN')
+                return False
+
+            # 第 1 轮用与账号一致的名字；第 2 轮起让服务端自动生成，规避同名冲突
+            name = reg_name if attempt == 1 else None
+            _log('recovery', f'第{attempt}/{rounds}轮尝试绑定辅助邮箱 name={name or "auto"}', 'INFO')
+            try:
+                result = bind_recovery_email(
+                    page, self.temp_mail_cfg, log=_log, name=name, auto_skip=False,
                 )
             except Exception as exc:
-                self.log_event('REGISTER', 'WARN', 'recovery_save', f'保存辅助邮箱记录失败: {exc}')
-        else:
-            self.bump_failure('recovery_bind_fail')
-        return ok
+                _log('recovery', f'第{attempt}轮绑定异常: {exc}', 'FAIL')
+                result = (False, None)
+            # 兼容 (ok, session) 或旧版 bool
+            if isinstance(result, tuple):
+                ok, session = result[0], (result[1] if len(result) > 1 else None)
+            else:
+                ok, session = bool(result), None
+            if ok:
+                self.thread_local.recovery_email_bound = True
+                self.thread_local.recovery_email_skipped = False
+                if session:
+                    self.thread_local.recovery_mail_session = session
+                    self.log_event(
+                        'REGISTER', 'INFO', 'recovery_session',
+                        f"已保存辅助邮箱会话 addr={session.get('address')}",
+                    )
+                # 保存 账号→辅助邮箱 绑定记录到 Results/recovery_emails.txt
+                try:
+                    from controllers.recovery_bind import save_recovery_record
+                    save_recovery_record(
+                        getattr(self.thread_local, '_reg_email', ''),
+                        getattr(self.thread_local, '_reg_password', ''),
+                        (session or {}).get('address', ''),
+                        log=_log,
+                    )
+                except Exception as exc:
+                    self.log_event('REGISTER', 'WARN', 'recovery_save', f'保存辅助邮箱记录失败: {exc}')
+                self.log_event(
+                    'REGISTER', 'OK', 'recovery_bind',
+                    f'注册阶段备用邮箱绑定成功（第{attempt}/{rounds}轮）',
+                )
+                return True
+            _log('recovery', f'第{attempt}/{rounds}轮绑定失败', 'WARN')
+            if attempt < rounds:
+                page.wait_for_timeout(2000)
+
+        self.bump_failure('recovery_bind_fail')
+        self._dump_page_debug(page, 'recovery_bind_fail')
+        _log('recovery', f'绑定重试{rounds}轮均失败，交还调用方决定是否兜底跳过', 'FAIL')
+        return False
 
     def _mark_recovery_skipped(self):
         """注册阶段未绑定、点了暂时跳过 → OAuth 仍可能再弹保护帐户页。"""
@@ -1085,37 +1172,69 @@ class OutlookController:
             'session': getattr(self.thread_local, 'recovery_mail_session', None),
         }
 
-    def _dismiss_post_register_intercepts(self, page):
+    def _dismiss_post_register_intercepts(self, page, allow_bind=True):
         """注册成功后、进 mail/0 前：优先绑定辅助邮箱，再处理通行密钥。
 
         正常路径：验证码通过 →「让我们来保护你的帐户」→ 绑定临时邮箱+接码
         → 取消通行密钥 → mail/0。绑定成功后 OAuth 通常不再出现该页。
+
+        allow_bind=False 时不再尝试绑定，直接走跳过分支（调用方用于限制总重试轮数）。
         """
         acted = False
 
-        # 1) 「让我们来保护你的帐户」：主路径绑定；失败才暂时跳过
+        # 1) 「让我们来保护你的帐户」：主路径绑定；force_bind 下失败会重试，最后才兜底跳过
         try:
             from controllers.recovery_bind import is_protect_account_page, is_ott_code_page
             on_protect = is_protect_account_page(page) or is_ott_code_page(page)
         except Exception:
             on_protect = page.locator('#EmailAddress').count() > 0 or page.locator('#iOttText').count() > 0
 
-        if on_protect and self.bind_recovery_email:
-            if self._try_bind_recovery_email(page):
+        # #iShowSkip（暂时跳过）几乎只出现在保护帐户页：启用了临时邮箱就必须绑定，不能看见跳过链就点
+        try:
+            has_skip = page.locator('#iShowSkip').count() > 0
+        except Exception:
+            has_skip = False
+        if not on_protect and has_skip and self.bind_recovery_email and allow_bind:
+            self.log_event(
+                'REGISTER', 'INFO', 'recovery',
+                '检测到 #iShowSkip 跳过链但未识别出邮箱框，按保护帐户页处理并尝试绑定',
+            )
+            on_protect = True
+
+        if on_protect and self.bind_recovery_email and allow_bind:
+            if getattr(self.thread_local, 'recovery_email_bound', False):
+                # 本轮任务已绑定成功：避免重复创建临时邮箱重复绑定，直接离开此页
+                self.log_event('REGISTER', 'INFO', 'recovery', '辅助邮箱已绑定过，不重复绑定，尝试离开保护页')
+                if self._click_if_visible(page.locator('#iShowSkip')):
+                    acted = True
+            elif self._try_bind_recovery_email(page):
                 self.log_event(
                     'REGISTER', 'OK', 'recovery_bind',
                     '注册阶段备用邮箱绑定成功（OAuth 通常不再出现此页）',
                 )
                 acted = True
             else:
-                if self._click_if_visible(page.locator('#iShowSkip')):
+                # 重试多轮仍失败：兜底才跳过，避免整个任务卡死在此页
+                skipped = self._click_if_visible(page.locator('#iShowSkip'))
+                if not skipped:
+                    for text in ('暂时跳过', 'Skip for now', 'Skip'):
+                        try:
+                            if self._click_if_visible(page.get_by_role('link', name=text)):
+                                skipped = True
+                                break
+                        except Exception:
+                            pass
+                if skipped:
                     self._mark_recovery_skipped()
                     self.log_event(
                         'REGISTER', 'WARN', 'skip_recovery',
-                        '注册阶段绑定失败，已 #iShowSkip；OAuth 仍可能再要求绑定',
+                        f'注册阶段绑定失败（已重试{self.recovery_bind_retries}轮），兜底 #iShowSkip；OAuth 仍可能再要求绑定',
                     )
                     acted = True
-        elif on_protect or page.locator('#iShowSkip').count() > 0:
+                else:
+                    # 连跳过都没点上：留在页面等下一轮循环再试
+                    self.log_event('REGISTER', 'WARN', 'recovery', '绑定失败且暂无法跳过，等待下一轮重试')
+        elif on_protect or has_skip:
             # temp_mail.enabled=false 时：只跳过
             if self._click_if_visible(page.locator('#iShowSkip')):
                 self._mark_recovery_skipped()
@@ -1201,17 +1320,19 @@ class OutlookController:
         """验证码通过后进入邮箱。
 
         保护帐户/绑定辅助邮箱为**概率事件**（日志 2026-07-19 多批验证）：
-          - 可能在注册后立刻出现 → 出现则绑定
+          - 可能在注册后立刻出现 → 出现则绑定（force_bind 默认开：失败重试，不轻易跳过）
           - 可能完全不出现 → 直接 mail/0 + OAuth（正常）
           - 也可能仅在 OAuth 中出现 → OAuth 侧再绑
-        不因「未出现」而长时间空等。
+        探针窗口 protect_wait_sec（默认 15s）内不强制跳邮箱；保护页在时禁止跳走。
         """
         mail_url = 'https://outlook.live.com/mail/0/'
         deadline = time.time() + timeout_ms / 1000.0
         force_count = 0
-        # 短等：给拦截页一点渲染时间；不出现则继续
-        protect_probe_deadline = time.time() + 5.0
+        # 探针窗口：给保护帐户页足够的渲染时间（默认 15s，可配 protect_wait_sec）
+        protect_probe_deadline = time.time() + self.recovery_protect_wait
         saw_protect = False
+        hold_logged = False
+        bind_rounds = 0  # 绑定彻底失败的轮数（用于限制总重试，避免单任务耗时失控）
 
         try:
             page.wait_for_timeout(1200)
@@ -1236,9 +1357,21 @@ class OutlookController:
                     )
                 saw_protect = True
 
-            if self._dismiss_post_register_intercepts(page):
+            allow_bind = bind_rounds < 2
+            if self._dismiss_post_register_intercepts(page, allow_bind=allow_bind):
                 page.wait_for_timeout(800)
                 continue
+
+            # 绑定彻底失败且跳过也没点掉：计数，超过 2 轮后直接走兜底跳过分支
+            if (
+                on_protect and self.bind_recovery_email and allow_bind
+                and not getattr(self.thread_local, 'recovery_email_bound', False)
+            ):
+                bind_rounds += 1
+                self.log_event(
+                    'REGISTER', 'WARN', 'recovery',
+                    f'保护帐户页绑定失败第{bind_rounds}轮',
+                )
 
             if self._is_mailbox_url(page) and not on_protect:
                 if page.locator('#iShowSkip').count() == 0 and page.locator('#EmailAddress').count() == 0:
@@ -1250,9 +1383,20 @@ class OutlookController:
                     )
                     return True
 
-            # 短探针窗口：仅多等几秒看是否弹出保护页
+            # 探针窗口：仅多等几秒看是否弹出保护页
             if self.bind_recovery_email and not saw_protect and time.time() < protect_probe_deadline:
                 page.wait_for_timeout(400)
+                continue
+
+            # 保护帐户页还在时禁止跳邮箱：跳走就等于放弃绑定
+            if on_protect:
+                if not hold_logged:
+                    self.log_event(
+                        'REGISTER', 'INFO', 'recovery',
+                        '保护帐户页仍在，暂停跳转邮箱，继续等待绑定结果',
+                    )
+                    hold_logged = True
+                page.wait_for_timeout(500)
                 continue
 
             if force_count < 2:
@@ -1282,8 +1426,18 @@ class OutlookController:
                 page.wait_for_timeout(500)
 
         try:
-            page.goto(mail_url, timeout=20000, wait_until='domcontentloaded')
-            self._dismiss_post_register_intercepts(page)
+            # 收尾：若仍卡在保护帐户页，不要跳邮箱（跳走=放弃绑定），再给一次拦截处理机会
+            try:
+                from controllers.recovery_bind import is_protect_account_page, is_ott_code_page
+                still_protect = is_protect_account_page(page) or is_ott_code_page(page)
+            except Exception:
+                still_protect = page.locator('#EmailAddress').count() > 0 or page.locator('#iShowSkip').count() > 0
+            if still_protect:
+                self.log_event('REGISTER', 'WARN', 'mail_enter', '超时但仍在保护帐户页，最后尝试一次拦截处理')
+                self._dismiss_post_register_intercepts(page, allow_bind=bind_rounds < 2)
+            else:
+                page.goto(mail_url, timeout=20000, wait_until='domcontentloaded')
+                self._dismiss_post_register_intercepts(page)
         except Exception:
             pass
 
@@ -1310,8 +1464,12 @@ class OutlookController:
         return self._captcha_hold(page)
 
     def _captcha_manual(self, page):
-        """半自动模式：程序暂停，轮询检测是否进入邮箱（最多5分钟），你手动按压验证码"""
+        """半自动模式：程序暂停，轮询检测是否进入邮箱（最多5分钟），你手动按压验证码。
+
+        等待期间若弹出「保护帐户」页，程序同样会自动绑定辅助邮箱（不跳过、不干等）。
+        """
         self.log_event('CAPTCHA', 'WARN', 'manual', '请手动完成验证码按压，等待进入邮箱...')
+        last_bind_try = 0.0
         for _ in range(300):
             page.wait_for_timeout(1000)
             try:
@@ -1319,6 +1477,20 @@ class OutlookController:
                     page.wait_for_timeout(2000)
                     self.log_event('CAPTCHA', 'OK', 'manual', '已进入邮箱！')
                     return True
+            except Exception:
+                pass
+            # 手动过码后弹出保护帐户页：程序继续去绑定，不等你手动点
+            try:
+                from controllers.recovery_bind import is_protect_account_page, is_ott_code_page
+                if is_protect_account_page(page) or is_ott_code_page(page):
+                    now = time.time()
+                    if now - last_bind_try >= 20:
+                        last_bind_try = now
+                        self.log_event(
+                            'CAPTCHA', 'INFO', 'recovery',
+                            '手动验证码后出现保护帐户页，尝试绑定辅助邮箱',
+                        )
+                        self._dismiss_post_register_intercepts(page)
             except Exception:
                 pass
         self.log_event('CAPTCHA', 'FAIL', 'manual', '超时（5分钟），未进入邮箱。')

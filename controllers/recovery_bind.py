@@ -60,27 +60,60 @@ CODE_ENTRY_COUNT = 6
 KMSI_NO_BTN = 'button[data-testid="secondaryButton"]'
 
 
+# --- 保护帐户页文案（中英繁 + 常见变体）---
+PROTECT_PAGE_TEXTS = (
+    "保护你的帐户", "保护您的帐户", "保护你的账户", "保护您的账户",
+    "帐户保护", "账户保护", "protect your account",
+)
+# 上述文案出现后的佐证词：有其一即可确认是「绑定辅助邮箱」页
+PROTECT_HINT_TEXTS = (
+    "备用", "辅助邮箱", "辅助邮件", "安全信息", "电子邮件地址", "电子邮件",
+    "recovery", "backup email", "security info",
+)
+
+
 def is_protect_account_page(page):
     """保护帐户 / 绑定备用邮箱页（#EmailAddress）。"""
     try:
-        if page.locator(BACKUP_EMAIL_SELECTOR).count() > 0:
+        loc = page.locator(BACKUP_EMAIL_SELECTOR)
+        if loc.count() > 0:
             try:
-                if page.locator(BACKUP_EMAIL_SELECTOR).first.is_visible():
+                if loc.first.is_visible():
                     return True
             except Exception:
                 return True
     except Exception:
         pass
     try:
-        body = (page.locator("body").inner_text(timeout=600) or "")[:800]
+        body = (page.locator("body").inner_text(timeout=600) or "")[:1500]
     except Exception:
         body = ""
-    if "保护你的帐户" in body or "保护您的帐户" in body or "protect your account" in body.lower():
-        if page.locator("#iShowSkip").count() > 0 or page.locator(NEXT_SELECTOR).count() > 0:
-            return True
-        if "备用" in body or "电子邮件" in body:
+    low = body.lower()
+    if any(t in body for t in PROTECT_PAGE_TEXTS) or "protect your account" in low:
+        if (
+            page.locator("#iShowSkip").count() > 0
+            or page.locator(NEXT_SELECTOR).count() > 0
+            or any(t in body for t in PROTECT_HINT_TEXTS)
+        ):
             return True
     return False
+
+
+def wait_for_protect_page(page, timeout_sec=15.0, poll_sec=0.5, log=None):
+    """轮询等待保护帐户页出现（注册后该页渲染可能明显慢于主流程）。"""
+    deadline = time.time() + max(0.0, float(timeout_sec))
+    while True:
+        try:
+            if is_protect_account_page(page) or is_ott_code_page(page):
+                return True
+        except Exception:
+            pass
+        if time.time() >= deadline:
+            return False
+        try:
+            page.wait_for_timeout(int(poll_sec * 1000))
+        except Exception:
+            time.sleep(poll_sec)
 
 
 def is_ott_code_page(page):
@@ -320,10 +353,12 @@ def _skip_protect(page, log):
     return False
 
 
-def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=None):
+def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=None, auto_skip=True):
     """在保护帐户页绑定备用邮箱并输入验证码。
 
     name: 可选，指定邮箱前缀（本地部分）。不传则自动生成。
+    auto_skip: 失败时是否内部直接点 #iShowSkip 暂时跳过。
+              注册主路径传 False——由调用方决定重试/兜底，避免一失败就跳过。
 
     成功返回 (True, session_dict)，session 含 address/jwt 供 OAuth 冷登录复用。
     失败返回 (False, None)。
@@ -332,8 +367,15 @@ def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=No
         if log:
             log(stage, msg, level)
 
+    def _give_up(reason, level="WARN"):
+        _log("recovery", reason, level)
+        if auto_skip:
+            _skip_protect(page, log)
+
     if not is_protect_account_page(page) and not is_ott_code_page(page):
-        return False, None
+        # 页面可能还在渲染：短等一会再判一次，避免漏判导致直接跳过
+        if not wait_for_protect_page(page, timeout_sec=10.0, log=log):
+            return False, None
 
     if is_ott_code_page(page) and not is_protect_account_page(page):
         try:
@@ -349,8 +391,7 @@ def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=No
     try:
         addr, jwt = client.create_address(name=name)
     except Exception as exc:
-        _log("recovery", f"创建临时邮箱失败: {exc}", "FAIL")
-        _skip_protect(page, log)
+        _give_up(f"创建临时邮箱失败: {exc}", "FAIL")
         return False, None
 
     session = {
@@ -365,7 +406,7 @@ def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=No
 
     try:
         email_box = page.locator(BACKUP_EMAIL_SELECTOR).first
-        email_box.wait_for(state="visible", timeout=10000)
+        email_box.wait_for(state="visible", timeout=15000)
         email_box.click(timeout=3000)
         email_box.fill("")
         email_box.fill(addr, timeout=5000)
@@ -374,16 +415,14 @@ def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=No
             raise RuntimeError("无法点击下一步提交备用邮箱")
         _log("recovery", f"已提交备用邮箱 {addr}", "INFO")
     except Exception as exp:
-        _log("recovery", f"填写备用邮箱失败: {exp}", "FAIL")
-        _skip_protect(page, log)
+        _give_up(f"填写备用邮箱失败: {exp}", "FAIL")
         return False, None
 
     try:
         page.locator(VERIFY_CODE_SELECTOR).first.wait_for(state="visible", timeout=30000)
     except Exception:
         if is_protect_account_page(page):
-            _log("recovery", "提交后仍在保护帐户页", "WARN")
-            _skip_protect(page, log)
+            _give_up("提交后仍在保护帐户页（未跳到验证码）", "WARN")
             return False, None
         if not is_ott_code_page(page):
             _log("recovery", "未出现验证码输入框，视为可能已完成", "WARN")
@@ -397,13 +436,15 @@ def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=No
         log=log,
     )
     if not code:
-        _log("recovery", "未收到微软验证码，尝试暂时跳过", "FAIL")
-        try:
-            page.go_back(timeout=5000)
-            page.wait_for_timeout(1000)
-            _skip_protect(page, log)
-        except Exception:
-            pass
+        _give_up("未收到微软验证码")
+        if auto_skip:
+            # 兼容旧行为：回退一次再点跳过（OAuth 兜底路径）
+            try:
+                page.go_back(timeout=5000)
+                page.wait_for_timeout(1000)
+                _skip_protect(page, log)
+            except Exception:
+                pass
         return False, None
 
     try:
@@ -418,7 +459,7 @@ def bind_recovery_email(page, temp_mail_cfg, log=None, code_timeout=120, name=No
         page.wait_for_timeout(1500)
         return True, session
     except Exception as exc:
-        _log("recovery", f"提交验证码失败: {exc}", "FAIL")
+        _give_up(f"提交验证码失败: {exc}", "FAIL")
         return False, None
 
 

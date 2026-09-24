@@ -137,6 +137,9 @@ python main.py
 | `enable_prefix` | bool | 是否啟用 `name_prefix`。 |
 | `code_timeout` | number | 等待驗證碼郵件逾時（秒）。 |
 | `poll_interval` | number | 輪詢收件匣間隔（秒）。 |
+| `force_bind` | bool | `true`（預設）= 驗證碼通過後彈出保護帳戶頁時，重試綁定而非直接跳過；重試全部失敗才兜底跳過。 |
+| `bind_retries` | number | `force_bind` 開啟時的綁定重試輪數（預設 `3`）。每輪使用全新臨時信箱位址，第 2 輪起不固定名字以規避同名衝突。 |
+| `protect_wait_sec` | number | 驗證碼通過後等待保護帳戶頁渲染的秒數（預設 `15`）；保護頁可見期間程式不會跳轉離開。 |
 
 ---
 

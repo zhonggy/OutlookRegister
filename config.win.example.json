@@ -36,7 +36,10 @@
     "name_prefix": "orx",
     "enable_prefix": true,
     "code_timeout": 120,
-    "poll_interval": 3
+    "poll_interval": 3,
+    "force_bind": true,
+    "bind_retries": 3,
+    "protect_wait_sec": 15
   },
   "browser": {
     "fingerprint_enabled": true,

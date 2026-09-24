@@ -1236,6 +1236,9 @@ async function renderSettings(main){
         <div class="field"><label>前缀（跟随 Outlook 前缀，这里备用）</label><input id="cfTmPrefix" value="${esc(t.name_prefix||'')}"></div>
         <div class="field"><label>验证码超时（秒）</label><input id="cfTmTimeout" type="number" value="${t.code_timeout??120}"></div>
         <div class="field"><label>轮询间隔（秒）</label><input id="cfTmPoll" type="number" value="${t.poll_interval??3}"></div>
+        <label class="chk-row"><input id="cfTmForce" type="checkbox" ${t.force_bind!==false?'checked':''}><div><strong>强制绑定辅助邮箱</strong><span class="hint" style="display:block">保护帐户页出现后不轻易点「暂时跳过」：绑定失败自动重试，全部失败才兜底跳过</span></div></label>
+        <div class="field"><label>绑定重试轮数</label><input id="cfTmRetry" type="number" value="${t.bind_retries??3}"></div>
+        <div class="field"><label>保护页等待（秒）</label><input id="cfTmWait" type="number" value="${t.protect_wait_sec??15}"></div>
       </div>
       <div class="card">
         <h3>Outlook Manager 对接</h3>
@@ -1291,6 +1294,9 @@ async function saveSettings(){
       enable_prefix:true,
       code_timeout:parseInt($('cfTmTimeout').value)||120,
       poll_interval:parseInt($('cfTmPoll').value)||3,
+      force_bind:$('cfTmForce').checked,
+      bind_retries:parseInt($('cfTmRetry').value)||3,
+      protect_wait_sec:parseInt($('cfTmWait').value)||15,
     },
     browser:{
       fingerprint_enabled:$('cfFpEn').checked,

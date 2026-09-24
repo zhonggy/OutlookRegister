@@ -137,6 +137,9 @@ Used only if Microsoft shows **“Help us protect your account”** and binding 
 | `enable_prefix` | bool | Whether to apply `name_prefix`. |
 | `code_timeout` | number | Seconds to wait for a verification code email. |
 | `poll_interval` | number | Seconds between inbox polls. |
+| `force_bind` | bool | `true` (default) = when the protect page appears after captcha, retry binding instead of skipping. Skipping only happens as a last resort after `bind_retries` failed rounds. |
+| `bind_retries` | number | Binding retry rounds when `force_bind` is on (default `3`). Each round uses a fresh address; round 2+ drops the fixed name to avoid name conflicts. |
+| `protect_wait_sec` | number | Seconds to wait for the protect page to render after captcha before entering the mailbox (default `15`). While the protect page is visible the program will not navigate away. |
 
 ---
 
