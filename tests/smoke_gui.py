@@ -70,8 +70,20 @@ def main() -> int:
     window.settings.reload()
     collected = window.settings._collect()
     for key in ("proxy", "oauth2", "browser", "temp_mail", "resin",
-                "outlook_manager", "update", "proxy_pool"):
+                "outlook_manager", "update", "proxy_pool", "email_prefix"):
         check(f"config section {key}", key in collected)
+
+    print("== 纯字母前缀生成 ==")
+    from utils import random_email as _random_email
+    sample = _random_email(pure_letters=True, letters_length=6)
+    check("pure letters length", len(sample) == 6, sample)
+    check("pure letters only a-z", sample.isalpha() and sample.islower(), sample)
+    clamped = _random_email(pure_letters=True, letters_length=999)
+    check("pure letters clamp to 32", len(clamped) == 32, str(len(clamped)))
+    default_len = len(_random_email(pure_letters=True, letters_length="bad"))
+    check("pure letters invalid -> 8", default_len == 8, str(default_len))
+    legacy = _random_email()
+    check("legacy name+digits", legacy[-5:].isdigit(), legacy)
 
     print("== 日志着色 ==")
     reg = window.register

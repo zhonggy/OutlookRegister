@@ -82,6 +82,7 @@ python main.py
 | 欄位 | 類型 | 說明 |
 | --- | --- | --- |
 | `email_suffix` | string | 註冊信箱後綴，如 `@outlook.com` 或 `@hotmail.com`。 |
+| `email_prefix` | object | 信箱前綴產生方式（純字母前綴開關），見下表。 |
 | `headless` | bool | `false` 顯示瀏覽器視窗；`true` 無頭。 |
 | `bot_protection_wait` | number | 填表節奏基準（秒）。程式內會 ×1000 作為等待。 |
 | `max_captcha_retries` | number | 驗證碼按壓額外重試次數（約 `max_captcha_retries + 1` 輪 Hold）。 |
@@ -93,6 +94,13 @@ python main.py
 | `proxy` | object | 代理設定（正式使用必填）。 |
 | `oauth2` | object | Graph OAuth2 設定。 |
 | `temp_mail` | object | 可選：保護帳戶頁自動綁定輔助信箱。 |
+
+### `email_prefix`
+
+| 欄位 | 型別 | 含義 |
+| --- | --- | --- |
+| `pure_letters` | bool | 純字母前綴開關（GUI「基礎 → 純字母前綴」）。`true` = 忽略姓名庫，直接產生指定長度的純小寫字母前綴（如 `kxjqmwba`）；`false`（預設）= 沿用原邏輯（姓名 + 5 位數字）。 |
+| `letters_length` | number | 純字母前綴位數，範圍 `4`~`32`（超出自動夾到邊界，非法值回退 `8`）。僅在 `pure_letters=true` 時生效。 |
 
 ### `captcha_strategy`
 

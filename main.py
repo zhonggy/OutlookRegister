@@ -321,7 +321,11 @@ def process_single_flow(controller, task_num=0, total=0):
 
     try:
         # 先生成邮箱（Resin 模式下前缀即 Account 标识，需在浏览器启动前确定）
-        email = random_email()
+        # 纯字母前缀开关开启时，忽略姓名库，按配置位数生成纯字母前缀
+        email = random_email(
+            pure_letters=getattr(controller, 'pure_letter_prefix', False),
+            letters_length=getattr(controller, 'pure_letter_prefix_length', 8),
+        )
         password = generate_strong_password()
         controller.set_task_account(email)
         controller.set_task_prefix(task_num, total)

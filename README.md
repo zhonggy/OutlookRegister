@@ -82,6 +82,7 @@ Ship template: `config.example.json` (same shape as the empty `config.json`).
 | Field | Type | Description |
 | --- | --- | --- |
 | `email_suffix` | string | Mail domain suffix used when generating accounts, e.g. `@outlook.com` or `@hotmail.com`. |
+| `email_prefix` | object | How the address local part is generated (pure-letter prefix switch). See below. |
 | `headless` | bool | `false` = show browser windows; `true` = headless. |
 | `bot_protection_wait` | number | Base pacing for form fill (seconds). Code multiplies by 1000 for delays. |
 | `max_captcha_retries` | number | Extra press/retry rounds for the press-and-hold captcha (about `max_captcha_retries + 1` hold attempts). |
@@ -93,6 +94,13 @@ Ship template: `config.example.json` (same shape as the empty `config.json`).
 | `proxy` | object | Proxy pool (required for real use). |
 | `oauth2` | object | Graph OAuth2 settings. |
 | `temp_mail` | object | Optional recovery-email binding via temp-mail API. |
+
+### `email_prefix`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `pure_letters` | bool | Pure-letter prefix switch (GUI: Basics → Pure-letter prefix). `true` = ignore the name list and generate a lowercase-only prefix of exactly `letters_length` letters (e.g. `kxjqmwba`); `false` (default) = original behavior (name + 5 digits). |
+| `letters_length` | number | Prefix length, clamped to `4`–`32` (invalid values fall back to `8`). Only used when `pure_letters=true`. |
 
 ### `captcha_strategy`
 

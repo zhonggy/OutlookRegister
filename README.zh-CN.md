@@ -110,6 +110,7 @@ CI 会校验 tag 与 `version.py` 一致，不一致直接失败。
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
 | `email_suffix` | string | 注册邮箱后缀，如 `@outlook.com` 或 `@hotmail.com`。 |
+| `email_prefix` | object | 邮箱前缀生成方式（纯字母前缀开关），见下表。 |
 | `headless` | bool | `false` 显示浏览器窗口；`true` 无头。 |
 | `bot_protection_wait` | number | 填表节奏基准（秒）。代码内会 ×1000 作为等待。 |
 | `max_captcha_retries` | number | 验证码按压额外重试次数（约 `max_captcha_retries + 1` 轮 Hold）。 |
@@ -127,6 +128,13 @@ CI 会校验 tag 与 `version.py` 一致，不一致直接失败。
 | `outlook_manager` | object | 可选：注册成功后自动推送到 OutlookManage。 |
 | `proxy_pool` | object | 可选：源码模式下一键启动脚本拉起外部代理池。 |
 | `update` | object | 可选：检查更新时的代理与 GitHub Token。 |
+
+### `email_prefix`
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `pure_letters` | bool | 纯字母前缀开关（GUI「基础 → 纯字母前缀」）。`true` = 忽略姓名库，直接生成指定长度的纯小写字母前缀（如 `kxjqmwba`）；`false`（默认）= 沿用原逻辑（姓名 + 5 位数字）。 |
+| `letters_length` | number | 纯字母前缀位数，范围 `4`~`32`（超出自动夹到边界，非法值回退 `8`）。仅在 `pure_letters=true` 时生效。 |
 
 ### `captcha_strategy`
 

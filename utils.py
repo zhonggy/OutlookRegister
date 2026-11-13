@@ -12,6 +12,20 @@ _NAMES_FILE = str(paths.NAMES_FILE)
 _names_cache = None
 _names_lock = threading.Lock()
 
+# 纯字母前缀长度限制（Outlook 本地部分上限 64，这里留出安全区间）
+DEFAULT_PURE_LETTER_LENGTH = 8
+MIN_PURE_LETTER_LENGTH = 4
+MAX_PURE_LETTER_LENGTH = 32
+
+
+def normalize_letters_length(value, default=DEFAULT_PURE_LETTER_LENGTH):
+    """把配置里的位数转成安全整数：非法值用默认，超出范围夹到 4~32。"""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return max(MIN_PURE_LETTER_LENGTH, min(MAX_PURE_LETTER_LENGTH, n))
+
 
 def _load_names():
     """懒加载姓名列表（线程安全，带缓存）。文件缺失/为空时返回空列表。"""
@@ -30,12 +44,19 @@ def _load_names():
         return _names_cache
 
 
-def random_email(length=None):
+def random_email(length=None, pure_letters=False, letters_length=DEFAULT_PURE_LETTER_LENGTH):
     """随机生成 Outlook 邮箱前缀。
 
-    优先：从 english_name_generator.txt 随机选一个姓名 + 5 位随机数字
-    （如 edwardriley37284）。文件缺失/为空时回退纯随机字符串（原逻辑）。
+    1) pure_letters=True：开启「纯字母前缀」开关，生成长度为 letters_length 的
+       纯小写字母前缀（如 kxjqmwba），位数范围 4~32。
+    2) 否则优先：从 english_name_generator.txt 随机选一个姓名 + 5 位随机数字
+       （如 edwardriley37284）。
+    3) 姓名库文件缺失/为空时回退纯随机字符串（原逻辑）。
     """
+    if pure_letters:
+        n = normalize_letters_length(letters_length)
+        return ''.join(random.choices(string.ascii_lowercase, k=n))
+
     names = _load_names()
     if names:
         name = random.choice(names)

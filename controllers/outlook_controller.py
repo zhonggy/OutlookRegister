@@ -14,6 +14,8 @@ paths.setup_browsers_env()
 from faker import Faker
 from patchright.sync_api import sync_playwright
 
+from utils import normalize_letters_length
+
 
 class OutlookController:
     """
@@ -63,6 +65,14 @@ class OutlookController:
         self.enable_oauth2 = config_data["oauth2"]['enable_oauth2']
         self.headless = config_data.get('headless', False)
         self.email_suffix = config_data['email_suffix']
+
+        # 邮箱前缀生成：纯字母前缀开关（config.email_prefix）
+        #   pure_letters  =True  时忽略姓名库，直接生成长度为 letters_length 的纯小写字母前缀
+        #   letters_length        位数，夹在 4~32 之间（默认 8）
+        prefix_cfg = config_data.get('email_prefix', {}) or {}
+        self.pure_letter_prefix = bool(prefix_cfg.get('pure_letters', False))
+        self.pure_letter_prefix_length = normalize_letters_length(
+            prefix_cfg.get('letters_length'))
 
         # 浏览器：支持从 config 开启 patchright 指纹（默认关闭，保持原行为）
         browser_cfg = config_data.get('browser', {}) or {}

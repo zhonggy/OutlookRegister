@@ -147,6 +147,9 @@ class SettingsView(QWidget):
         box = QGroupBox("基础")
         form = _form(box)
         self.f_suffix = QLineEdit()
+        self.f_pure_letters = QCheckBox("纯字母前缀（忽略姓名库）")
+        self.f_prefix_len = spinbox(4, 32, 8, digits=2)
+        self.f_pure_letters.toggled.connect(self.f_prefix_len.setEnabled)
         self.f_headless = QCheckBox("无头模式（不显示浏览器窗口）")
         self.f_wait = spinbox(1, 300, 15, digits=4)
         self.f_page_timeout = spinbox(5, 600, 45, digits=4)
@@ -158,6 +161,8 @@ class SettingsView(QWidget):
         self.f_batch = spinbox(1, 100000, 300)
 
         form.addRow(_lbl("邮箱后缀"), self.f_suffix)
+        form.addRow(_lbl(""), self.f_pure_letters)
+        form.addRow(_lbl("纯字母位数"), self.f_prefix_len)
         form.addRow(_lbl(""), self.f_headless)
         form.addRow(_lbl("填表节奏基准(秒)"), self.f_wait)
         form.addRow(_lbl("页面打开超时（秒）"), self.f_page_timeout)
@@ -358,6 +363,10 @@ class SettingsView(QWidget):
                 box.setCurrentIndex(index)
 
         self.f_suffix.setText(cfg.get("email_suffix") or "@outlook.com")
+        ep = cfg.get("email_prefix") or {}
+        self.f_pure_letters.setChecked(bool(ep.get("pure_letters", False)))
+        self.f_prefix_len.setValue(int(ep.get("letters_length") or 8))
+        self.f_prefix_len.setEnabled(self.f_pure_letters.isChecked())
         self.f_headless.setChecked(bool(cfg.get("headless")))
         self.f_wait.setValue(int(cfg.get("bot_protection_wait") or 15))
         self.f_page_timeout.setValue(int(cfg.get("page_open_timeout") or 45))
@@ -414,6 +423,10 @@ class SettingsView(QWidget):
         prefix = self.f_tm_prefix.text().strip()
         return {
             "email_suffix": self.f_suffix.text().strip() or "@outlook.com",
+            "email_prefix": {
+                "pure_letters": self.f_pure_letters.isChecked(),
+                "letters_length": self.f_prefix_len.value(),
+            },
             "headless": self.f_headless.isChecked(),
             "bot_protection_wait": self.f_wait.value(),
             "page_open_timeout": self.f_page_timeout.value(),

@@ -1,5 +1,9 @@
 {
   "email_suffix": "@outlook.com",
+  "email_prefix": {
+    "pure_letters": false,
+    "letters_length": 8
+  },
   "headless": false,
   "bot_protection_wait": 15,
   "max_captcha_retries": 3,
